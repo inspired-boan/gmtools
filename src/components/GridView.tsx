@@ -21,11 +21,20 @@ export default function GridView({ nodeId }: { nodeId: string }) {
     | null
   >(null);
   const resizing = useRef<{ colId: string; startX: number; startW: number } | null>(null);
+  /** 脏单元格：输入即标记，失焦/卸载时冲刷，避免丢失编辑 */
+  const dirty = useRef(new Map<string, { rowId: string; colId: string; value: string | null }>());
 
   const reload = useCallback(async () => {
     try {
       const g = await invoke<GridDto>("get_grid", { nodeId });
-      setGrid(g);
+      // 合并尚未落库的编辑，避免刷新吞掉正在输入的内容
+      const cells = [...g.cells];
+      for (const c of dirty.current.values()) {
+        const i = cells.findIndex((x) => x.rowId === c.rowId && x.colId === c.colId);
+        if (i >= 0) cells[i] = { ...cells[i], value: c.value };
+        else cells.push({ rowId: c.rowId, colId: c.colId, value: c.value });
+      }
+      setGrid({ ...g, cells });
     } catch (e) {
       setError(String(e));
     }
@@ -35,9 +44,28 @@ export default function GridView({ nodeId }: { nodeId: string }) {
     reload();
   }, [reload]);
 
-  // 全局关闭右键菜单 + 列宽拖拽
+  // 卸载前冲刷所有未保存单元格
   useEffect(() => {
-    const close = () => setMenu(null);
+    return () => {
+      for (const c of dirty.current.values()) {
+        void invoke("set_cell", c).catch(() => {});
+      }
+      dirty.current.clear();
+    };
+  }, []);
+
+  const saveCell = (rowId: string, colId: string, value: string | null) => {
+    dirty.current.delete(`${rowId}:${colId}`);
+    updateCellLocal(rowId, colId, value);
+    void invoke("set_cell", { rowId, colId, value }).catch((e) => setError(String(e)));
+  };
+
+  // 全局关闭右键菜单（菜单内部点击除外）+ 列宽拖拽
+  useEffect(() => {
+    const close = (e: MouseEvent) => {
+      if ((e.target as HTMLElement).closest("[data-grid-menu]")) return;
+      setMenu(null);
+    };
     const move = (e: MouseEvent) => {
       if (!resizing.current) return;
       const dx = e.clientX - resizing.current.startX;
@@ -95,11 +123,6 @@ export default function GridView({ nodeId }: { nodeId: string }) {
         : [...g.cells, { rowId, colId, value }];
       return { ...g, cells };
     });
-  };
-
-  const saveCell = (rowId: string, colId: string, value: string | null) => {
-    updateCellLocal(rowId, colId, value);
-    void invoke("set_cell", { rowId, colId, value }).catch((e) => setError(String(e)));
   };
 
   return (
@@ -202,11 +225,18 @@ export default function GridView({ nodeId }: { nodeId: string }) {
                         <input
                           className="h-8 w-full bg-transparent px-3 text-body-sm text-body focus:bg-canvas focus:outline-none focus:ring-1 focus:ring-primary/40"
                           value={v ?? ""}
-                          onChange={(e) => updateCellLocal(row.id, col.id, e.target.value)}
-                          onBlur={(e) => {
-                            if ((v ?? "") !== e.target.value) {
-                              saveCell(row.id, col.id, e.target.value === "" ? null : e.target.value);
-                            }
+                          onChange={(e) => {
+                            updateCellLocal(row.id, col.id, e.target.value);
+                            dirty.current.set(`${row.id}:${col.id}`, {
+                              rowId: row.id,
+                              colId: col.id,
+                              value: e.target.value === "" ? null : e.target.value,
+                            });
+                          }}
+                          onBlur={() => {
+                            // 以脏标记为准：onChange 与 blur 的值恒等，不能用 v 比较
+                            const pending = dirty.current.get(`${row.id}:${col.id}`);
+                            if (pending) saveCell(pending.rowId, pending.colId, pending.value);
                           }}
                         />
                       ) : (
@@ -280,7 +310,9 @@ export default function GridView({ nodeId }: { nodeId: string }) {
       )}
 
       {/* 右键菜单 */}
-      {menu && <GridMenu menu={menu} nodeId={nodeId} reload={reload} />}
+      {menu && (
+        <GridMenu menu={menu} nodeId={nodeId} reload={reload} onClose={() => setMenu(null)} />
+      )}
     </div>
   );
 }
@@ -289,22 +321,27 @@ function GridMenu({
   menu,
   nodeId,
   reload,
+  onClose,
 }: {
   menu:
     | { kind: "col"; x: number; y: number; col: ColDto }
     | { kind: "row"; x: number; y: number; rowIndex: number; rowId: string };
   nodeId: string;
   reload: () => Promise<void>;
+  onClose: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(menu.kind === "col" ? menu.col.name : "");
 
-  const item = (label: string, onClick: () => void, danger?: boolean) => (
+  const item = (label: string, onClick: () => void, danger?: boolean, autoClose = true) => (
     <button
       className={`h-8 w-full px-3 text-left text-body-sm hover:bg-surface-soft ${
         danger ? "text-error" : "text-ink"
       }`}
-      onClick={onClick}
+      onClick={() => {
+        onClick();
+        if (autoClose) onClose();
+      }}
     >
       {label}
     </button>
@@ -326,6 +363,7 @@ function GridMenu({
                 await invoke("rename_col", { colId: col.id, name: name.trim() });
                 await reload();
                 setRenaming(false);
+                onClose();
               }
             }}
           />
@@ -346,10 +384,15 @@ function GridMenu({
             await invoke("add_col", { nodeId, name: "新列", colType: "text", index: idx + 1 });
             await reload();
           })}
-          {item("重命名", () => {
-            setName(col.name);
-            setRenaming(true);
-          })}
+          {item(
+            "重命名",
+            () => {
+              setName(col.name);
+              setRenaming(true);
+            },
+            false,
+            false,
+          )}
           <div className="my-1 border-t border-hairline-soft" />
           {item("删除列", async () => {
             await invoke("del_col", { colId: col.id });
@@ -381,8 +424,10 @@ function GridMenu({
 
   return (
     <div
+      data-grid-menu
       className="fixed z-50 w-40 rounded-lg border border-hairline bg-canvas py-1 shadow-lg"
       style={{ left: Math.min(menu.x, window.innerWidth - 180), top: Math.min(menu.y, window.innerHeight - 220) }}
+      onClick={(e) => e.stopPropagation()}
     >
       {content}
     </div>

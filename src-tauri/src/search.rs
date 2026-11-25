@@ -6,7 +6,7 @@ use tauri::State;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResult {
-    pub ref_type: String,
+    pub ref_type: String, // 'node' | 'note' | 'cell'
     pub ref_id: String,
     pub node_id: String,
     pub node_name: String,
@@ -33,6 +33,32 @@ pub fn search(state: State<Db>, query: String) -> Result<Vec<SearchResult>, Stri
     };
 
     let mut results = Vec::new();
+
+    // 节点名匹配（LIKE 扫描，置于结果最前方便定位）
+    {
+        let like = format!("%{}%", q.replace('%', "").replace('_', ""));
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT id, name FROM node WHERE name LIKE ?1 ORDER BY name LIMIT {}",
+                MAX_RESULTS
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![like], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (id, name) = row.map_err(|e| e.to_string())?;
+            results.push(SearchResult {
+                ref_type: "node".to_string(),
+                ref_id: id.clone(),
+                node_id: id,
+                node_name: name.clone(),
+                snippet: name,
+            });
+        }
+    }
 
     if q.chars().count() >= 3 {
         // trigram MATCH：把查询串当整体短语

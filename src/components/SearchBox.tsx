@@ -4,11 +4,11 @@ import { useTree } from "../store";
 import type { NodeDto } from "../types";
 
 interface SearchResult {
-  refType: "note" | "cell";
+  refType: "node" | "note" | "cell";
   refId: string;
   nodeId: string;
   nodeName: string;
-  snippet: string; // FTS 路径带 << >> 高亮标记；LIKE 路径为纯片段
+  snippet: string; // FTS 路径带 << >> 高亮标记；LIKE/节点名路径为纯片段
 }
 
 /** 片段高亮：优先用 << >> 标记，否则按关键词匹配切分 */
@@ -126,12 +126,22 @@ export default function SearchBox() {
                 <div className="flex items-center gap-1.5">
                   <span
                     className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                      r.refType === "note" ? "bg-accent-teal" : "bg-accent-amber"
+                      r.refType === "node"
+                        ? "bg-primary"
+                        : r.refType === "note"
+                          ? "bg-accent-teal"
+                          : "bg-accent-amber"
                     }`}
                   />
-                  <span className="truncate text-title-sm text-ink">{r.nodeName}</span>
+                  <span className="truncate text-title-sm text-ink">
+                    {r.refType === "node" ? (
+                      <Highlight text={r.nodeName} query={query.trim()} />
+                    ) : (
+                      r.nodeName
+                    )}
+                  </span>
                   <span className="ml-auto shrink-0 text-caption text-muted-soft">
-                    {r.refType === "note" ? "笔记" : "表格"}
+                    {r.refType === "node" ? "节点" : r.refType === "note" ? "笔记" : "表格"}
                   </span>
                 </div>
                 <div className="mt-0.5 line-clamp-2 text-caption text-muted">
