@@ -24,10 +24,25 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     if version < 1 {
         v1(conn).map_err(|e| format!("迁移 v1 失败: {}", e))?;
     }
+    if version < 2 {
+        v2(conn).map_err(|e| format!("迁移 v2 失败: {}", e))?;
+    }
 
-    conn.pragma_update(None, "user_version", 1)
+    conn.pragma_update(None, "user_version", 2)
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn v2(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE image (
+          id          TEXT PRIMARY KEY,
+          ext         TEXT NOT NULL,
+          created_at  INTEGER NOT NULL
+        );
+        "#,
+    )
 }
 
 fn v1(conn: &Connection) -> Result<(), rusqlite::Error> {

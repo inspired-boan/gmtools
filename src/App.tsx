@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import NoteEditor from "./components/NoteEditor";
 import { Tree } from "./components/Tree";
 import { childrenOf, useTree } from "./store";
 
@@ -58,27 +59,33 @@ export default function App() {
       </aside>
 
       {/* 右侧内容区 */}
-      <main className="flex flex-1 flex-col items-center justify-center bg-canvas">
+      <main className="flex flex-1 flex-col overflow-hidden bg-canvas">
         {selected ? (
-          <div className="text-center">
-            <p className="text-caption text-muted-soft">
-              {selected.nodeType === "label" ? "标签" : selected.nodeType === "note" ? "笔记" : "表格"}
-            </p>
-            <h1 className="mt-1 font-display text-display-sm text-ink">{selected.name}</h1>
-            <p className="mt-3 text-body-sm text-muted">
-              {selected.nodeType === "note"
-                ? "笔记编辑器在里程碑 4 接入"
-                : selected.nodeType === "table"
-                  ? "表格编辑在里程碑 5 接入"
-                  : `包含 ${childrenOf(nodes, selected.id).length} 个子节点`}
-            </p>
-          </div>
+          selected.nodeType === "note" ? (
+            <NoteEditor key={selected.id} nodeId={selected.id} />
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center">
+              <div className="text-center">
+                <p className="text-caption text-muted-soft">
+                  {selected.nodeType === "label" ? "标签" : "表格"}
+                </p>
+                <h1 className="mt-1 font-display text-display-sm text-ink">{selected.name}</h1>
+                <p className="mt-3 text-body-sm text-muted">
+                  {selected.nodeType === "table"
+                    ? "表格编辑在里程碑 5 接入"
+                    : `包含 ${childrenOf(nodes, selected.id).length} 个子节点`}
+                </p>
+              </div>
+            </div>
+          )
         ) : (
-          <div className="text-center">
-            <h1 className="font-display text-display-md text-ink">GM 工具</h1>
-            <p className="mt-2 text-body-md text-muted">
-              从左侧选择一个节点，或新建规则开始备团
-            </p>
+          <div className="flex flex-1 items-center justify-center">
+            <div className="text-center">
+              <h1 className="font-display text-display-md text-ink">GM 工具</h1>
+              <p className="mt-2 text-body-md text-muted">
+                从左侧选择一个节点，或新建规则开始备团
+              </p>
+            </div>
           </div>
         )}
       </main>

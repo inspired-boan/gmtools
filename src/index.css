@@ -14,3 +14,48 @@
     -webkit-font-smoothing: antialiased;
   }
 }
+
+/* 笔记编辑器内容排版（所见即所得） */
+.note-content {
+  @apply text-body-md text-body outline-none;
+  min-height: 100%;
+}
+.note-content h1,
+.note-content h2,
+.note-content h3 {
+  @apply font-display font-normal text-ink;
+}
+.note-content h1 {
+  @apply text-display-md mt-2 mb-3;
+}
+.note-content h2 {
+  @apply text-display-sm mt-6 mb-2;
+}
+.note-content h3 {
+  @apply text-title-lg mt-4 mb-2;
+}
+.note-content p {
+  @apply my-2;
+}
+.note-content ul {
+  @apply my-2 list-disc pl-6;
+}
+.note-content ol {
+  @apply my-2 list-decimal pl-6;
+}
+.note-content blockquote {
+  @apply my-3 border-l-4 border-primary/40 bg-surface-soft px-4 py-1 text-muted;
+}
+.note-content pre {
+  @apply my-3 rounded-md bg-surface-dark p-4 font-code text-body-sm text-on-dark;
+  white-space: pre-wrap;
+}
+.note-content code {
+  @apply font-code text-body-sm;
+}
+.note-content img {
+  @apply my-3 max-w-full rounded-lg;
+}
+.note-content hr {
+  @apply my-6 border-hairline;
+}
