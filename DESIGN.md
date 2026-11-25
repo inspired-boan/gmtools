@@ -1,6 +1,6 @@
 # gmtools 设计文档
 
-> 依据 [mpt.md](mpt.md) 的需求拷问确认后整理。MVP（树形目录 / 笔记 / 表格 / 搜索 / 导出）写到实现级；卡片/模板系统（v2）只写概要设计。
+> 依据 [mpt.md](mpt.md) 的需求拷问确认后整理。v1（树形目录 / 笔记 / 表格 / 搜索 / 导出）与 v2（卡片/模板系统）均写到实现级；v1 已全部完成，v2 待实施（M9–M11）。
 > UI 视觉规范见 [DESIGN-claude.md](DESIGN-claude.md)。
 
 ## 1. 定位与边界
@@ -266,23 +266,135 @@ open_data_dir() / change_data_dir(newPath)
 
 ---
 
-## 7. 卡片/模板系统（v2 概要设计）
+## 7. v2 卡片/模板系统
 
-> 只定边界与接口，不写实现细节。第一版为其预留：`node.type='card'`、`grid_col.type='card'`、图片收纳机制。
+> 经拷问确认的设计（全部决策点已过）。第一版已预留：`node.type='card'`、`grid_col.type='card'`、图片收纳机制。
 
-### 数据模型（方向）
+### 7.0 决策记录
 
+| 决策点 | 结论 |
+|---|---|
+| 布局模型 | 12 列栅格拖放；组件可跨列设宽（span 1~12），纵向自动排列不重叠 |
+| 渲染技术 | 结构化 JSON + React 渲染器，不用 HTML/CSS 字符串模板 |
+| 风格 | 5 套预设主题 + 单组件覆盖颜色/字号 |
+| 模板归属 | 挂规则节点下（`rule_id`），规则内共享；跨规则复制模板节点 |
+| 组件集 | 7 种：text / markdown / number / dropdown（静态选项）/ image / group（一层嵌套）/ style（风格调整） |
+| 组件属性 | 标签、占位提示、默认值、必填、跨列宽度 |
+| 模板修改 | 实时生效；被删组件的卡片数据保留但不渲染；保存时提示"应用于 N 张卡片" |
+| 模板存放 | 树节点类型 `template`，点开即编辑器 |
+| 表格卡片视图 | 表格可选模板 + 列→组件映射；配置存 settings（键控节点 id），快照随行 |
+| 卡片空态 | 引导态：列出可用模板；无模板提示先创建 |
+| 下拉选项 | 静态定义；动态引用（表格列取值）留 v3 接口 |
+| 卡片尺寸 | 预设：npc 竖卡 420×595 / item 横卡 595×420 / art 全宽立绘 760×570（px，可缩放渲染） |
+| 交付顺序 | 模板编辑器 → 卡片节点 → 表格卡片视图，三步各自可运行 |
+
+### 7.1 数据模型（迁移 v4）
+
+```sql
+CREATE TABLE template (
+  node_id     TEXT PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+  rule_id     TEXT,                           -- 最近的 label 祖先；根级模板为 NULL（全局可用）
+  size        TEXT NOT NULL DEFAULT 'npc',    -- 'npc' | 'item' | 'art'
+  theme       TEXT NOT NULL DEFAULT 'cream',
+  components  TEXT NOT NULL DEFAULT '[]',     -- 组件定义 JSON（见 7.2）
+  updated_at  INTEGER NOT NULL
+);
+
+CREATE TABLE card (
+  node_id     TEXT PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+  template_id TEXT NOT NULL,                  -- 模板节点 id
+  data        TEXT NOT NULL DEFAULT '{}',     -- 组件id → 填写值（JSON）
+  updated_at  INTEGER NOT NULL
+);
 ```
-template(id, name, rule_id, components JSON, layout JSON, style JSON, created_at, updated_at)
-card(id, node_id, template_id, data JSON)      -- data：组件名 → 填写值
+
+- 表格卡片视图配置：`settings` 表，键 `cardview:<表格节点id>`，值 `{ templateId, mapping }` JSON；节点快照导出时随行（NodeSnapshot 增加 `cardView` 字段）。
+- `node.type` 枚举扩展为 `label | note | table | template | card`。
+
+### 7.2 组件定义 JSON
+
+```jsonc
+// template.components 数组元素；分组组件含一层 children
+{
+  "id": "c_ab12",                // 组件 id，卡片 data 的 key；nanoid 短 id
+  "type": "text",                // text | markdown | number | dropdown | image | group | style
+  "label": "姓名",
+  "placeholder": "",
+  "default": "",
+  "required": false,
+  "span": 6,                     // 跨列数 1~12，默认 6
+  "options": ["存活", "死亡"],    // 仅 dropdown
+  "children": [ /* 仅 group，一层 */ ],
+  "style": { "color": "", "fontSize": "" }  // 覆盖项，空串表示跟随主题
+}
 ```
 
-- **模板 = 组件列表 + 布局 + 风格**。组件类型：输入框、markdown 输入框、下拉框、分组组件、卡片风格调整组件。
-- **卡片节点流程**：新建卡片 → 选模板 → 左填写右实时预览 → 存 `data`。
-- **模板界面流程**：定义名称/所属规则 → 添加输入组件 → 调整卡片上组件位置 → 保存。
-- **卡片导入/导出**：单卡 JSON（含 template 快照，保证对方没有该模板也能渲染）。
+- 布局 = **数组顺序**（画布上拖拽排序即改数组）+ 每个组件的 `span`；group 的 `children` 内部同样适用。
+- 卡片 `data` 以组件 `id` 为 key：`{ "c_ab12": "艾琳", "c_cd34": 17 }`。组件被删后对应 data 项保留（不渲染），模板恢复后自动回显。
 
-### 与第一版的接口约定
+### 7.3 主题预设
 
-- `grid_col.type='card'`：v2 时单元格存 card id，表格卡片视图按模板渲染——表格视图切换的实现留到 v2，但网格组件的列类型渲染器做成可扩展 map。
-- 布局描述采用结构化 JSON（组件坐标/尺寸），不用代码生成，保证模板可导出迁移。
+| key | 名 | 基调（取自 DESIGN-claude.md 色板） |
+|---|---|---|
+| `cream` | 素雅 | 画布 #faf9f5 + 墨字 + hairline 边框（默认） |
+| `dark` | 暗夜 | #181715 底 + on-dark 字 + 深色高亮 |
+| `coral` | 珊瑚 | 奶油底 + 珊瑚色标题/边框强调 |
+| `forest` | 墨林 | #1f2a24 底 + 青绿强调（accent-teal） |
+| `parchment` | 羊皮纸 | #e8e0d2 底 + 棕墨字 + 双线边框 |
+
+主题实现：渲染器读 CSS 变量组（每主题一组 `--card-bg/--card-ink/--card-accent/--card-border`），组件级 `style` 覆盖以 inline style 优先。
+
+### 7.4 Tauri Command
+
+```ts
+// 模板
+get_template(nodeId): TemplateDto                // { nodeId, ruleId, size, theme, components }
+save_template(nodeId, size, theme, components)   // 编辑器整体保存；返回受影响卡片数（前端提示用）
+count_cards_using(templateNodeId): number
+list_templates_for(nodeId): TemplateBrief[]      // 卡片可用模板：rule_id 匹配卡片最近的 label 祖先 或 NULL
+
+// 卡片
+get_card(nodeId): { templateId, data } | null
+save_card(nodeId, templateId, data)              // 选模板（或换模板）+ 填写均走此命令
+list_cards_using(templateNodeId): NodeBrief[]    // "应用于 N 张卡片"提示 + 模板节点页显示引用列表
+
+// 表格卡片视图
+get_card_view(nodeId): { templateId, mapping } | null   // mapping: colId → componentId
+set_card_view(nodeId, config | null)
+```
+
+### 7.5 功能设计
+
+**模板编辑器**（模板节点的内容区）
+- 三段布局：左侧组件库（7 种，点击/拖入画布）· 中间 12 列栅格画布（按选定尺寸渲染底板，拖拽排序、点选编辑）· 右侧属性面板（选中组件的属性 + 主题/尺寸选择器）。
+- 画布组件呈"骨架态"：显示标签、占位示意，不渲染真实数据；拖拽用 HTML5 DnD（与树拖拽同一套手感）。
+- group 组件拖入后成为容器，子组件可拖入其内部栅格；一层嵌套上限在拖拽层校验。
+- 保存策略：编辑停顿 800ms 自动 `save_template` + 手动保存按钮；保存时若 `count_cards_using > 0` 顶部提示"此模板已被 N 张卡片使用"。
+
+**卡片节点**
+- 新建卡片节点 → 引导态：列出可用模板（rule 匹配 + 全局），点击选定并进入填写态；规则下无模板时提示"先在某规则下新建模板节点"。
+- 填写态：左侧按组件类型渲染输入控件（必填项标红星，未填完不影响保存），右侧实时预览（CardRenderer view 模式，按模板主题渲染）。
+- 图片组件：点击/拖拽上传 → 复用 `save_image` + `gm-img://` 引用。
+- 导入/导出：复用节点导出管线——`NodeSnapshot` 增加 `template` / `card` / `cardView` 三个可选字段；导出单张卡时自动内嵌其模板定义，对方导入即得完整可渲染卡片。
+
+**表格卡片视图**
+- 表格节点内容区顶部加"表格 / 卡片"切换；首次切卡片时引导选择模板 + 列映射（下拉选列 → 组件）。
+- 卡片墙：按 `sort_order` 排列的模板卡（复用 CardRenderer），单元格值为空时组件显示占位。
+- 映射配置存 `settings`；快照/导出表格节点时一并带走。
+
+**渲染器（CardRenderer）**
+- 单一 React 组件三模式：`edit`（模板编辑器骨架）/ `fill`（卡片填写）/ `view`（预览与卡片墙）。
+- 组件渲染器做成 map（`text → <input>`、`markdown → 只读 md 渲染`、`image → <img>`…），`grid_col.type='card'` 的 v3 扩展点也落在这张 map 上。
+
+### 7.6 v2 里程碑
+
+1. **M9 模板编辑器**：迁移 v4 + template commands + 编辑器 UI（组件库/栅格画布/属性面板/主题尺寸）。
+2. **M10 卡片节点**：card commands + 引导态 + 填写/预览 + 快照扩展（卡片导出导入）。
+3. **M11 表格卡片视图**：视图配置 + 列映射 + 卡片墙渲染。
+
+每个里程碑产出可运行版本；M9 + M10 完成即达到"能做 NPC 卡"的最小可用。
+
+### 7.7 与第一版的接口约定（继承）
+
+- `grid_col.type='card'`（单元格直接存卡片引用）留 v3；本轮表格卡片视图走"列映射"方案，不动 grid_cell 结构。
+- 下拉框动态数据源留 v3：`options` 字段允许后续扩展为 `{ source: "table", colId }` 对象形式，静态数组保持兼容。
