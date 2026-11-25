@@ -1,3 +1,5 @@
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { childrenOf, subtreeCount, useTree } from "../store";
 import type { NodeDto, NodeType } from "../types";
@@ -275,6 +277,42 @@ function NodeMenu({ x, y, node, onClose }: { x: number; y: number; node: NodeDto
         onClick={async () => {
           await copyNode(node.id, node.parentId, `${node.name} (副本)`);
           onClose();
+        }}
+      />
+      <MenuItem
+        label="导出节点"
+        onClick={async () => {
+          onClose();
+          const path = await saveDialog({
+            title: "导出节点",
+            defaultPath: `${node.name}.gmnode.json`,
+            filters: [{ name: "GM工具节点", extensions: ["json"] }],
+          });
+          if (!path) return;
+          try {
+            await invoke("export_node", { nodeId: node.id, path });
+          } catch (e) {
+            window.alert(`导出失败: ${e}`);
+          }
+        }}
+      />
+      <MenuItem
+        label="导入节点到此处"
+        onClick={async () => {
+          onClose();
+          const path = await openDialog({
+            title: "导入节点",
+            multiple: false,
+            directory: false,
+            filters: [{ name: "GM工具节点", extensions: ["json"] }],
+          });
+          if (!path) return;
+          try {
+            await invoke("import_node", { path, parentId: node.id });
+            await useTree.getState().load();
+          } catch (e) {
+            window.alert(`导入失败: ${e}`);
+          }
         }}
       />
       <MenuItem label="重命名" onClick={() => {

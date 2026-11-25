@@ -49,49 +49,49 @@ impl<'a> From<&'a Row<'a>> for NodeDto {
 
 const NODE_COLS: &str = "id, parent_id, type, name, sort_order, created_at, updated_at";
 
-// ---------- 快照（回收站用） ----------
+// ---------- 快照（回收站 / 导出共用） ----------
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct NodeSnapshot {
-    id: String,
-    parent_id: Option<String>,
-    node_type: String,
-    name: String,
-    sort_order: f64,
-    note: Option<String>,
-    cols: Vec<ColSnapshot>,
-    rows: Vec<RowSnapshot>,
-    cells: Vec<CellSnapshot>,
-    children: Vec<NodeSnapshot>,
+pub struct NodeSnapshot {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub node_type: String,
+    pub name: String,
+    pub sort_order: f64,
+    pub note: Option<String>,
+    pub cols: Vec<ColSnapshot>,
+    pub rows: Vec<RowSnapshot>,
+    pub cells: Vec<CellSnapshot>,
+    pub children: Vec<NodeSnapshot>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ColSnapshot {
-    id: String,
-    name: String,
-    col_type: String,
-    width: Option<i64>,
-    sort_order: f64,
+pub struct ColSnapshot {
+    pub id: String,
+    pub name: String,
+    pub col_type: String,
+    pub width: Option<i64>,
+    pub sort_order: f64,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RowSnapshot {
-    id: String,
-    sort_order: f64,
+pub struct RowSnapshot {
+    pub id: String,
+    pub sort_order: f64,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CellSnapshot {
-    row_id: String,
-    col_id: String,
-    value: Option<String>,
+pub struct CellSnapshot {
+    pub row_id: String,
+    pub col_id: String,
+    pub value: Option<String>,
 }
 
-fn snapshot_node(conn: &Connection, id: &str) -> Result<NodeSnapshot, String> {
+pub fn snapshot_node(conn: &Connection, id: &str) -> Result<NodeSnapshot, String> {
     let mut stmt = conn
         .prepare(&format!("SELECT {} FROM node WHERE id = ?1", NODE_COLS))
         .map_err(|e| e.to_string())?;
@@ -193,7 +193,7 @@ fn snapshot_node(conn: &Connection, id: &str) -> Result<NodeSnapshot, String> {
     })
 }
 
-fn insert_snapshot(
+pub fn insert_snapshot(
     conn: &Connection,
     snap: &NodeSnapshot,
     new_parent: Option<&str>,

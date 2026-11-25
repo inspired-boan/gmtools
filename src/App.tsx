@@ -1,5 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import GridView from "./components/GridView";
 import NoteEditor from "./components/NoteEditor";
+import SearchBox from "./components/SearchBox";
+import SettingsModal from "./components/SettingsModal";
 import { Tree } from "./components/Tree";
 import { childrenOf, useTree } from "./store";
 
@@ -9,6 +12,7 @@ import { childrenOf, useTree } from "./store";
  */
 export default function App() {
   const { nodes, selectedId, load, createNode } = useTree();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
 
   useEffect(() => {
@@ -19,13 +23,7 @@ export default function App() {
     <div className="flex h-full">
       {/* 左侧栏 */}
       <aside className="flex w-[280px] shrink-0 flex-col border-r border-hairline bg-canvas">
-        <div className="p-3">
-          <input
-            type="text"
-            placeholder="搜索笔记和表格…"
-            className="h-10 w-full rounded-md border border-hairline bg-canvas px-3.5 text-body-sm text-ink placeholder:text-muted-soft focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15"
-          />
-        </div>
+        <SearchBox />
 
         <div className="px-3 pb-1">
           <button
@@ -51,29 +49,32 @@ export default function App() {
             <button className="h-9 flex-1 rounded-md border border-hairline bg-canvas px-3 text-caption text-ink hover:bg-surface-soft">
               回收站
             </button>
-            <button className="h-9 flex-1 rounded-md border border-hairline bg-canvas px-3 text-caption text-ink hover:bg-surface-soft">
+            <button
+              className="h-9 flex-1 rounded-md border border-hairline bg-canvas px-3 text-caption text-ink hover:bg-surface-soft"
+              onClick={() => setSettingsOpen(true)}
+            >
               设置
             </button>
           </div>
         </div>
       </aside>
 
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+
       {/* 右侧内容区 */}
       <main className="flex flex-1 flex-col overflow-hidden bg-canvas">
         {selected ? (
           selected.nodeType === "note" ? (
             <NoteEditor key={selected.id} nodeId={selected.id} />
+          ) : selected.nodeType === "table" ? (
+            <GridView key={selected.id} nodeId={selected.id} />
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center">
               <div className="text-center">
-                <p className="text-caption text-muted-soft">
-                  {selected.nodeType === "label" ? "标签" : "表格"}
-                </p>
+                <p className="text-caption text-muted-soft">标签</p>
                 <h1 className="mt-1 font-display text-display-sm text-ink">{selected.name}</h1>
                 <p className="mt-3 text-body-sm text-muted">
-                  {selected.nodeType === "table"
-                    ? "表格编辑在里程碑 5 接入"
-                    : `包含 ${childrenOf(nodes, selected.id).length} 个子节点`}
+                  包含 {childrenOf(nodes, selected.id).length} 个子节点
                 </p>
               </div>
             </div>

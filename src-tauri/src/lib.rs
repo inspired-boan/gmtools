@@ -1,6 +1,9 @@
 mod db;
+mod export;
+mod grid;
 mod image;
 mod note;
+mod search;
 mod tree;
 
 use std::borrow::Cow;
@@ -30,6 +33,7 @@ fn mime_for_ext(ext: &str) -> &'static str {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         // gm-img://<id>.<ext> → 数据目录 images/ 下的文件
         // Windows 下实际访问为 http(s)://gm-img.localhost/<id>.<ext>
         .register_uri_scheme_protocol("gm-img", move |_ctx, request| {
@@ -70,6 +74,20 @@ pub fn run() {
             note::get_note,
             note::save_note,
             image::save_image,
+            grid::get_grid,
+            grid::add_col,
+            grid::rename_col,
+            grid::set_col_width,
+            grid::del_col,
+            grid::add_row,
+            grid::del_row,
+            grid::set_cell,
+            search::search,
+            export::export_node,
+            export::import_node,
+            export::export_full,
+            export::import_full,
+            export::open_data_dir,
         ])
         .run(tauri::generate_context!())
         .expect("gmtools 启动失败");

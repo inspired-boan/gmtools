@@ -27,10 +27,43 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     if version < 2 {
         v2(conn).map_err(|e| format!("迁移 v2 失败: {}", e))?;
     }
+    if version < 3 {
+        v3(conn).map_err(|e| format!("迁移 v3 失败: {}", e))?;
+    }
 
-    conn.pragma_update(None, "user_version", 2)
+    conn.pragma_update(None, "user_version", 3)
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// v3：fts 从 unicode61 换成 trigram 分词器，支持中文 ≥3 字子串匹配；
+/// 短查询由 search 模块回退 LIKE 扫描。重建后从源表回填索引。
+fn v3(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        r#"
+        DROP TABLE IF EXISTS fts;
+        CREATE VIRTUAL TABLE fts USING fts5(
+          text,
+          ref_type UNINDEXED,
+          ref_id   UNINDEXED,
+          node_id  UNINDEXED,
+          tokenize = 'trigram',
+          detail   = 'none'
+        );
+
+        -- 回填笔记
+        INSERT INTO fts (text, ref_type, ref_id, node_id)
+        SELECT content, 'note', node_id, node_id FROM note
+        WHERE trim(content) != '';
+
+        -- 回填表格单元格
+        INSERT INTO fts (text, ref_type, ref_id, node_id)
+        SELECT value, 'cell', c.row_id || ':' || c.col_id, r.node_id
+        FROM grid_cell c
+        JOIN grid_row r ON r.id = c.row_id
+        WHERE c.value IS NOT NULL AND trim(c.value) != '';
+        "#,
+    )
 }
 
 fn v2(conn: &Connection) -> Result<(), rusqlite::Error> {
