@@ -593,7 +593,7 @@ pub fn restore_from_trash(state: State<Db>, trash_id: String) -> Result<(), Stri
     let snapshot: String = conn
         .query_row("SELECT snapshot FROM trash WHERE id = ?1", params![trash_id], |r| r.get(0))
         .map_err(|_| "回收站条目不存在".to_string())?;
-    let mut snap: NodeSnapshot =
+    let snap: NodeSnapshot =
         serde_json::from_str(&snapshot).map_err(|_| "快照数据损坏".to_string())?;
 
     // 原父节点仍在则挂回原位，否则挂到根
