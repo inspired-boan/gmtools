@@ -3,6 +3,7 @@ import GridView from "./components/GridView";
 import NoteEditor from "./components/NoteEditor";
 import SearchBox from "./components/SearchBox";
 import SettingsModal from "./components/SettingsModal";
+import TrashModal from "./components/TrashModal";
 import { Tree } from "./components/Tree";
 import { childrenOf, useTree } from "./store";
 
@@ -13,6 +14,7 @@ import { childrenOf, useTree } from "./store";
 export default function App() {
   const { nodes, selectedId, load, createNode } = useTree();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
 
   useEffect(() => {
@@ -46,7 +48,10 @@ export default function App() {
 
         <div className="border-t border-hairline-soft p-3">
           <div className="flex gap-2">
-            <button className="h-9 flex-1 rounded-md border border-hairline bg-canvas px-3 text-caption text-ink hover:bg-surface-soft">
+            <button
+              className="h-9 flex-1 rounded-md border border-hairline bg-canvas px-3 text-caption text-ink hover:bg-surface-soft"
+              onClick={() => setTrashOpen(true)}
+            >
               回收站
             </button>
             <button
@@ -60,6 +65,7 @@ export default function App() {
       </aside>
 
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {trashOpen && <TrashModal onClose={() => setTrashOpen(false)} />}
 
       {/* 右侧内容区 */}
       <main className="flex flex-1 flex-col overflow-hidden bg-canvas">

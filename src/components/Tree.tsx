@@ -14,6 +14,8 @@ const DOT: Record<NodeType, string> = {
 export function Tree() {
   const { nodes, loaded, load, expanded, selectedId, select, toggleExpand } = useTree();
   const [menu, setMenu] = useState<{ x: number; y: number; node: NodeDto | null } | null>(null);
+  /** 右键菜单触发的重命名：Tree 层持有 id，对应行直接进入编辑态 */
+  const [renamingId, setRenamingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loaded) load();
@@ -50,6 +52,9 @@ export function Tree() {
           depth={0}
           expanded={expanded}
           selectedId={selectedId}
+          renamingId={renamingId}
+          onRenameDone={() => setRenamingId(null)}
+          onStartRename={(id) => setRenamingId(id)}
           onSelect={select}
           onToggle={toggleExpand}
           onContextMenu={(x, y, node) => setMenu({ x, y, node })}
@@ -61,6 +66,7 @@ export function Tree() {
           y={menu.y}
           node={menu.node}
           onClose={() => setMenu(null)}
+          onStartRename={(id) => setRenamingId(id)}
         />
       )}
     </div>
@@ -74,23 +80,42 @@ interface RowProps {
   depth: number;
   expanded: Record<string, boolean>;
   selectedId: string | null;
+  renamingId: string | null;
+  onRenameDone: () => void;
+  onStartRename: (id: string) => void;
   onSelect: (id: string) => void;
   onToggle: (id: string) => void;
   onContextMenu: (x: number, y: number, node: NodeDto) => void;
 }
 
-function TreeNodeRow({ node, depth, expanded, selectedId, onSelect, onToggle, onContextMenu }: RowProps) {
+function TreeNodeRow({
+  node,
+  depth,
+  expanded,
+  selectedId,
+  renamingId,
+  onRenameDone,
+  onStartRename,
+  onSelect,
+  onToggle,
+  onContextMenu,
+}: RowProps) {
   const { nodes, renameNode, moveNode } = useTree();
-  const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState(node.name);
   const [dropZone, setDropZone] = useState<"before" | "inside" | "after" | null>(null);
   const isOpen = !!expanded[node.id];
   const children = childrenOf(nodes, node.id);
   const hasChildren = children.length > 0;
+  const renaming = renamingId === node.id;
+
+  // 进入编辑态时（无论双击还是右键菜单触发）同步草稿名
+  useEffect(() => {
+    if (renaming) setDraftName(node.name);
+  }, [renaming, node.name]);
 
   const commitRename = async () => {
     const name = draftName.trim();
-    setRenaming(false);
+    onRenameDone();
     if (name && name !== node.name) {
       await renameNode(node.id, name);
     } else {
@@ -127,7 +152,8 @@ function TreeNodeRow({ node, depth, expanded, selectedId, onSelect, onToggle, on
         onClick={() => onSelect(node.id)}
         onDoubleClick={() => {
           setDraftName(node.name);
-          setRenaming(true);
+          onRenameDone();
+          onStartRename(node.id);
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -165,6 +191,7 @@ function TreeNodeRow({ node, depth, expanded, selectedId, onSelect, onToggle, on
         {renaming ? (
           <input
             autoFocus
+            onFocus={(e) => e.currentTarget.select()}
             className="h-6 w-full min-w-0 rounded-xs border border-primary bg-canvas px-1 text-body-sm text-ink focus:outline-none"
             value={draftName}
             onChange={(e) => setDraftName(e.target.value)}
@@ -172,7 +199,7 @@ function TreeNodeRow({ node, depth, expanded, selectedId, onSelect, onToggle, on
             onKeyDown={(e) => {
               if (e.key === "Enter") commitRename();
               if (e.key === "Escape") {
-                setRenaming(false);
+                onRenameDone();
                 setDraftName(node.name);
               }
             }}
@@ -198,6 +225,9 @@ function TreeNodeRow({ node, depth, expanded, selectedId, onSelect, onToggle, on
             depth={depth + 1}
             expanded={expanded}
             selectedId={selectedId}
+            renamingId={renamingId}
+            onRenameDone={onRenameDone}
+            onStartRename={onStartRename}
             onSelect={onSelect}
             onToggle={onToggle}
             onContextMenu={onContextMenu}
@@ -209,7 +239,19 @@ function TreeNodeRow({ node, depth, expanded, selectedId, onSelect, onToggle, on
 
 // ---------- 右键菜单 ----------
 
-function NodeMenu({ x, y, node, onClose }: { x: number; y: number; node: NodeDto | null; onClose: () => void }) {
+function NodeMenu({
+  x,
+  y,
+  node,
+  onClose,
+  onStartRename,
+}: {
+  x: number;
+  y: number;
+  node: NodeDto | null;
+  onClose: () => void;
+  onStartRename: (id: string) => void;
+}) {
   const { createNode, copyNode, deleteNode } = useTree();
   const [sub, setSub] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -315,11 +357,13 @@ function NodeMenu({ x, y, node, onClose }: { x: number; y: number; node: NodeDto
           }
         }}
       />
-      <MenuItem label="重命名" onClick={() => {
-        onClose();
-        // 触发内联重命名：再次双击即可；此处用 dblclick 事件模拟成本高，直接提示
-        // TODO(打磨)：菜单触发内联编辑
-      }} />
+      <MenuItem
+        label="重命名"
+        onClick={() => {
+          onClose();
+          onStartRename(node.id);
+        }}
+      />
       <div className="my-1 border-t border-hairline-soft" />
       <MenuItem
         label="删除"

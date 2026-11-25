@@ -529,3 +529,116 @@ fn count_subtree(conn: &Connection, id: &str) -> Result<usize, String> {
         .map(|c| count_subtree(conn, c).unwrap_or(0))
         .sum::<usize>())
 }
+
+// ---------- 设置 ----------
+
+#[tauri::command]
+pub fn get_setting(state: State<Db>, key: String) -> Result<Option<String>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let v = conn
+        .query_row("SELECT value FROM settings WHERE key = ?1", params![key], |r| r.get(0))
+        .ok();
+    Ok(v)
+}
+
+#[tauri::command]
+pub fn set_setting(state: State<Db>, key: String, value: String) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ---------- 回收站 ----------
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashItemDto {
+    pub id: String,
+    pub node_id: String,
+    pub name: String,
+    pub deleted_at: i64,
+}
+
+#[tauri::command]
+pub fn list_trash(state: State<Db>) -> Result<Vec<TrashItemDto>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, node_id, name, deleted_at FROM trash ORDER BY deleted_at DESC")
+        .map_err(|e| e.to_string())?;
+    let items = stmt
+        .query_map([], |r| {
+            Ok(TrashItemDto {
+                id: r.get(0)?,
+                node_id: r.get(1)?,
+                name: r.get(2)?,
+                deleted_at: r.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(items)
+}
+
+/// 恢复：重新分配 UUID（避免与现存节点冲突），原父节点已不存在则挂到根。
+/// 图片文件不随快照走（引用 id 不变），恢复后引用依然有效。
+#[tauri::command]
+pub fn restore_from_trash(state: State<Db>, trash_id: String) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let snapshot: String = conn
+        .query_row("SELECT snapshot FROM trash WHERE id = ?1", params![trash_id], |r| r.get(0))
+        .map_err(|_| "回收站条目不存在".to_string())?;
+    let mut snap: NodeSnapshot =
+        serde_json::from_str(&snapshot).map_err(|_| "快照数据损坏".to_string())?;
+
+    // 原父节点仍在则挂回原位，否则挂到根
+    let parent_target: Option<String> = match &snap.parent_id {
+        Some(pid) => {
+            let exists: i64 = conn
+                .query_row("SELECT COUNT(*) FROM node WHERE id = ?1", params![pid], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            if exists > 0 {
+                Some(pid.clone())
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+
+    conn.execute("BEGIN", []).map_err(|e| e.to_string())?;
+    let r = (|| -> Result<(), String> {
+        insert_snapshot(&conn, &snap, parent_target.as_deref(), None, true)?;
+        conn.execute("DELETE FROM trash WHERE id = ?1", params![trash_id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    if let Err(e) = r {
+        let _ = conn.execute("ROLLBACK", []);
+        return Err(e);
+    }
+    conn.execute("COMMIT", []).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 彻底删除：传 id 删单条，None 清空全部
+#[tauri::command]
+pub fn purge_trash(state: State<Db>, trash_id: Option<String>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    match trash_id {
+        Some(id) => {
+            conn.execute("DELETE FROM trash WHERE id = ?1", params![id])
+                .map_err(|e| e.to_string())?;
+        }
+        None => {
+            conn.execute("DELETE FROM trash", [])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}

@@ -29,9 +29,21 @@ export const useTree = create<TreeState>((set, get) => ({
   load: async () => {
     const nodes = await invoke<NodeDto[]>("get_tree");
     set({ nodes, loaded: true });
+    // 恢复上次选中的节点（设置里存过且仍存在时）
+    if (get().selectedId === null) {
+      try {
+        const saved = await invoke<string | null>("get_setting", { key: "selectedId" });
+        if (saved && nodes.some((n) => n.id === saved)) set({ selectedId: saved });
+      } catch {
+        /* 设置不存在则忽略 */
+      }
+    }
   },
 
-  select: (id) => set({ selectedId: id }),
+  select: (id) => {
+    set({ selectedId: id });
+    if (id) void invoke("set_setting", { key: "selectedId", value: id }).catch(() => {});
+  },
   toggleExpand: (id) => set((s) => ({ expanded: { ...s.expanded, [id]: !s.expanded[id] } })),
   setExpanded: (id, v) => set((s) => ({ expanded: { ...s.expanded, [id]: v } })),
 
