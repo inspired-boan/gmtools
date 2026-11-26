@@ -4,11 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { childrenOf, subtreeCount, useTree } from "../store";
 import type { NodeDto, NodeType } from "../types";
 
-/** 类型圆点：label 珊瑚 / note 青绿 / table 琥珀（DESIGN-claude.md accent 色） */
+/** 类型圆点：label 珊瑚 / note 青绿 / table 琥珀 / template 墨色 / card 灰 */
 const DOT: Record<NodeType, string> = {
   label: "bg-primary",
   note: "bg-accent-teal",
   table: "bg-accent-amber",
+  template: "bg-ink",
+  card: "bg-muted",
 };
 
 export function Tree() {
@@ -301,12 +303,19 @@ function NodeMenu({
         <MenuItem label="新建子节点" trailing={sub ? "" : "▸"} />
         {sub && (
           <div className="absolute left-full top-0 -ml-1 w-36 rounded-lg border border-hairline bg-canvas py-1 shadow-lg">
-            {(["label", "note", "table"] as NodeType[]).map((t) => (
+            {(["label", "note", "table", "template", "card"] as NodeType[]).map((t) => (
               <MenuItem
                 key={t}
-                label={t === "label" ? "标签" : t === "note" ? "笔记" : "表格"}
+                label={t === "label" ? "标签" : t === "note" ? "笔记" : t === "table" ? "表格" : t === "template" ? "模板" : "卡片"}
                 onClick={async () => {
-                  await createNode(node.id, t, t === "label" ? "新标签" : t === "note" ? "新笔记" : "新表格");
+                  const names: Record<NodeType, string> = {
+                    label: "新标签",
+                    note: "新笔记",
+                    table: "新表格",
+                    template: "新模板",
+                    card: "新卡片",
+                  };
+                  await createNode(node.id, t, names[t]);
                   onClose();
                 }}
               />

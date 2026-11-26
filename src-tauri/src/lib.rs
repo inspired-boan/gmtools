@@ -4,6 +4,7 @@ mod grid;
 mod image;
 mod note;
 mod search;
+mod template;
 mod tree;
 
 use std::borrow::Cow;
@@ -76,6 +77,15 @@ pub fn run() {
             tree::list_trash,
             tree::restore_from_trash,
             tree::purge_trash,
+            template::get_template,
+            template::save_template,
+            template::count_cards_using,
+            template::list_cards_using,
+            template::list_templates_for,
+            template::get_card,
+            template::save_card,
+            template::get_card_view,
+            template::set_card_view,
             note::get_note,
             note::save_note,
             image::save_image,

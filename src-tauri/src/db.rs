@@ -30,10 +30,46 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     if version < 3 {
         v3(conn).map_err(|e| format!("迁移 v3 失败: {}", e))?;
     }
+    if version < 4 {
+        v4(conn).map_err(|e| format!("迁移 v4 失败: {}", e))?;
+    }
+    if version < 5 {
+        v5(conn).map_err(|e| format!("迁移 v5 失败: {}", e))?;
+    }
 
-    conn.pragma_update(None, "user_version", 3)
+    conn.pragma_update(None, "user_version", 5)
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// v5：模板自动高度选项
+fn v5(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "ALTER TABLE template ADD COLUMN auto_height INTEGER NOT NULL DEFAULT 0;",
+    )
+}
+
+/// v4：v2 卡片/模板系统（DESIGN.md §7）
+fn v4(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE template (
+          node_id     TEXT PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+          rule_id     TEXT,
+          size        TEXT NOT NULL DEFAULT 'npc',
+          theme       TEXT NOT NULL DEFAULT 'cream',
+          components  TEXT NOT NULL DEFAULT '[]',
+          updated_at  INTEGER NOT NULL
+        );
+
+        CREATE TABLE card (
+          node_id     TEXT PRIMARY KEY REFERENCES node(id) ON DELETE CASCADE,
+          template_id TEXT NOT NULL,
+          data        TEXT NOT NULL DEFAULT '{}',
+          updated_at  INTEGER NOT NULL
+        );
+        "#,
+    )
 }
 
 /// v3：fts 从 unicode61 换成 trigram 分词器，支持中文 ≥3 字子串匹配；

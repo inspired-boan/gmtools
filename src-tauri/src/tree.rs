@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 pub struct Db(pub Mutex<Connection>);
 
-pub const NODE_TYPES: [&str; 3] = ["label", "note", "table"]; // 'card' 为 v2 预留
+pub const NODE_TYPES: [&str; 5] = ["label", "note", "table", "template", "card"];
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -64,6 +64,30 @@ pub struct NodeSnapshot {
     pub rows: Vec<RowSnapshot>,
     pub cells: Vec<CellSnapshot>,
     pub children: Vec<NodeSnapshot>,
+    #[serde(default)]
+    pub template: Option<TemplateSnapshot>,
+    #[serde(default)]
+    pub card: Option<CardSnapshot>,
+    #[serde(default)]
+    pub card_view: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateSnapshot {
+    pub rule_id: Option<String>,
+    pub size: String,
+    pub theme: String,
+    pub components: serde_json::Value,
+    #[serde(default)]
+    pub auto_height: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardSnapshot {
+    pub template_id: String,
+    pub data: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -179,6 +203,53 @@ pub fn snapshot_node(conn: &Connection, id: &str) -> Result<NodeSnapshot, String
         children.push(snapshot_node(conn, &cid)?);
     }
 
+    // v2：模板 / 卡片 / 表格卡片视图配置
+    let template = if node_type == "template" {
+        conn.query_row(
+            "SELECT rule_id, size, theme, components, auto_height FROM template WHERE node_id = ?1",
+            params![id],
+            |r| {
+                Ok(TemplateSnapshot {
+                    rule_id: r.get(0)?,
+                    size: r.get(1)?,
+                    theme: r.get(2)?,
+                    components: serde_json::from_str(&r.get::<_, String>(3)?)
+                        .unwrap_or(serde_json::Value::Array(vec![])),
+                    auto_height: r.get::<_, i64>(4)? != 0,
+                })
+            },
+        )
+        .ok()
+    } else {
+        None
+    };
+
+    let card = if node_type == "card" {
+        conn.query_row(
+            "SELECT template_id, data FROM card WHERE node_id = ?1",
+            params![id],
+            |r| {
+                Ok(CardSnapshot {
+                    template_id: r.get(0)?,
+                    data: serde_json::from_str(&r.get::<_, String>(1)?)
+                        .unwrap_or(serde_json::Value::Object(Default::default())),
+                })
+            },
+        )
+        .ok()
+    } else {
+        None
+    };
+
+    let card_view = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![format!("cardview:{}", id)],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok());
+
     Ok(NodeSnapshot {
         id: base_id,
         parent_id,
@@ -190,6 +261,9 @@ pub fn snapshot_node(conn: &Connection, id: &str) -> Result<NodeSnapshot, String
         rows,
         cells,
         children,
+        template,
+        card,
+        card_view,
     })
 }
 
@@ -268,6 +342,47 @@ pub fn insert_snapshot(
             )
             .map_err(|e| e.to_string())?;
         }
+    }
+
+    // v2：模板 / 卡片 / 卡片视图配置
+    if let Some(t) = &snap.template {
+        conn.execute(
+            "INSERT OR REPLACE INTO template (node_id, rule_id, size, theme, components, auto_height, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                id,
+                t.rule_id,
+                t.size,
+                t.theme,
+                serde_json::to_string(&t.components).unwrap_or_else(|_| "[]".to_string()),
+                t.auto_height as i64,
+                now_ms()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    if let Some(c) = &snap.card {
+        // 复制卡片时 template_id 保持指向同一模板节点（共享模板）；若模板在本快照子树内，
+        // 由调用方在插入前改写 id（快照导出场景已按整树处理）
+        conn.execute(
+            "INSERT OR REPLACE INTO card (node_id, template_id, data, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                id,
+                c.template_id,
+                serde_json::to_string(&c.data).unwrap_or_else(|_| "{}".to_string()),
+                now_ms()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    if let Some(cv) = &snap.card_view {
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+            params![
+                format!("cardview:{}", id),
+                serde_json::to_string(cv).unwrap_or_default()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     for child in &snap.children {
@@ -373,6 +488,15 @@ pub fn create_node(
     if node_type == "note" {
         conn.execute("INSERT INTO note (node_id, content) VALUES (?1, '')", params![id])
             .map_err(|e| e.to_string())?;
+    }
+    if node_type == "template" {
+        // 归属：父链上最近的 label 祖先（规则）；根级模板 rule_id 为 NULL（全局可用）
+        let rule_id = nearest_label_ancestor(&conn, parent_id.as_deref())?;
+        conn.execute(
+            "INSERT INTO template (node_id, rule_id, size, theme, components, auto_height, updated_at) VALUES (?1, ?2, 'npc', 'cream', '[]', 0, ?3)",
+            params![id, rule_id, ts],
+        )
+        .map_err(|e| e.to_string())?;
     }
     Ok(NodeDto {
         id,
@@ -515,8 +639,28 @@ pub fn delete_node(state: State<Db>, id: String) -> Result<usize, String> {
     Ok(count)
 }
 
-fn count_subtree(conn: &Connection, id: &str) -> Result<usize, String> {
-    let mut stmt = conn
+/// 从给定节点向上找最近的 label（规则）祖先；到达根返回 None
+pub fn nearest_label_ancestor(conn: &Connection, start: Option<&str>) -> Result<Option<String>, String> {
+    let mut current = match start {
+        Some(s) => s.to_string(),
+        None => return Ok(None),
+    };
+    loop {
+        let row = conn.query_row(
+            "SELECT parent_id, type FROM node WHERE id = ?1",
+            params![current],
+            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)),
+        );
+        match row {
+            Err(_) => return Ok(None),
+            Ok((_, t)) if t == "label" => return Ok(Some(current)),
+            Ok((None, _)) => return Ok(None),
+            Ok((Some(p), _)) => current = p,
+        }
+    }
+}
+
+fn count_subtree(conn: &Connection, id: &str) -> Result<usize, String> {    let mut stmt = conn
         .prepare("SELECT id FROM node WHERE parent_id = ?1")
         .map_err(|e| e.to_string())?;
     let children = stmt
