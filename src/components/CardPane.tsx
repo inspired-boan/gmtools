@@ -35,6 +35,7 @@ export default function CardPane({ nodeId }: { nodeId: string }) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<"saved" | "dirty">("saved");
+  const [formHidden, setFormHidden] = useState(false);
   const timer = useRef<number | null>(null);
   const pending = useRef(false);
   const stateRef = useRef<CardData | null>(null);
@@ -286,28 +287,45 @@ export default function CardPane({ nodeId }: { nodeId: string }) {
 
   return (
     <div className="flex h-full min-h-0">
-      {/* 左：填写表单 */}
-      <div className="flex w-[420px] shrink-0 flex-col border-r border-hairline">
-        <div className="flex items-center border-b border-hairline-soft px-4 py-2">
-          <p className="text-title-sm text-ink">填写</p>
-          <span className="ml-auto text-caption text-muted-soft">
-            {saveState === "dirty" ? "未保存" : "已自动保存"}
-          </span>
+      {/* 左：填写表单（可收起） */}
+      {!formHidden && (
+        <div className="flex w-[420px] shrink-0 flex-col border-r border-hairline">
+          <div className="flex items-center border-b border-hairline-soft px-4 py-2">
+            <p className="text-title-sm text-ink">填写</p>
+            <span className="ml-auto text-caption text-muted-soft">
+              {saveState === "dirty" ? "未保存" : "已自动保存"}
+            </span>
+            <button
+              className="ml-3 h-7 w-7 rounded-md text-caption text-muted hover:bg-surface-soft hover:text-ink"
+              title="收起填写面板"
+              onClick={() => setFormHidden(true)}
+            >
+              ‹
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4">
+            <div className="grid grid-cols-12 items-start gap-3">{tpl.components.map(renderField)}</div>
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="grid grid-cols-12 items-start gap-3">{tpl.components.map(renderField)}</div>
-        </div>
-      </div>
+      )}
 
       {/* 右：实时预览 */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        <div className="border-b border-hairline-soft px-4 py-2">
-          <p className="text-title-sm text-ink">
-            预览
-            <span className="ml-2 text-caption text-muted-soft">
-              {CARD_THEMES[tpl.theme].name} · {CARD_SIZES[tpl.size].name}
-            </span>
-          </p>
+        <div className="flex items-center border-b border-hairline-soft px-4 py-2">
+          {formHidden ? (
+            <button
+              className="h-7 rounded-md px-2 text-caption text-muted hover:bg-surface-soft hover:text-ink"
+              title="展开填写面板"
+              onClick={() => setFormHidden(false)}
+            >
+              › 展开填写
+            </button>
+          ) : (
+            <p className="text-title-sm text-ink">预览</p>
+          )}
+          <span className="ml-3 text-caption text-muted-soft">
+            {CARD_THEMES[tpl.theme].name} · {CARD_SIZES[tpl.size].name} · 悬停卡片查看 3D 烫金效果
+          </span>
         </div>
         <div className="flex flex-1 justify-center overflow-y-auto bg-surface-soft p-6">
           <CardRenderer

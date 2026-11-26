@@ -2,6 +2,77 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 滚动条：奶油色调细条，悬停珊瑚 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #e8e0d2 transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #e8e0d2;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #cc785c;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 卡片 3D 场景：透视容器 + 倾斜层 + 烫金光泽层 */
+.card-3d-scene {
+  perspective: 900px;
+}
+.card-3d {
+  position: relative;
+  transform-style: preserve-3d;
+  transition:
+    transform 0.15s ease-out,
+    filter 0.15s ease-out,
+    box-shadow 0.2s ease;
+  will-change: transform;
+}
+.card-3d:hover {
+  box-shadow: 0 18px 40px -12px rgba(20, 20, 19, 0.35);
+}
+.card-foil {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  mix-blend-mode: screen;
+  background:
+    radial-gradient(
+      circle at var(--mx, 50%) var(--my, 50%),
+      rgba(255, 232, 180, 0.22),
+      rgba(255, 232, 180, 0) 40%
+    ),
+    linear-gradient(
+      115deg,
+      transparent 25%,
+      rgba(255, 215, 130, 0.16) 40%,
+      rgba(255, 248, 220, 0.34) 50%,
+      rgba(255, 215, 130, 0.16) 60%,
+      transparent 75%
+    );
+  background-size:
+    100% 100%,
+    220% 220%;
+  background-position:
+    0 0,
+    var(--mx, 50%) var(--my, 50%);
+}
+
 @layer base {
   html,
   body,

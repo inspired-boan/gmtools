@@ -1,5 +1,6 @@
 import { marked } from "marked";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { useRef } from "react";
 import { CARD_SIZES, CARD_THEMES, type ComponentDef, type ComponentStyle } from "../types";
 
 /** gm-img:// 引用转为可访问 URL */
@@ -143,18 +144,54 @@ export default function CardRenderer({
     }
   };
 
+  // ---------- 3D 倾斜 + 烫金光泽（参考 steam0917 achievementcard/gamecard） ----------
+  const cardRef = useRef<HTMLDivElement>(null);
+  const foilRef = useRef<HTMLDivElement>(null);
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    const card = cardRef.current;
+    const foil = foilRef.current;
+    if (!card || !foil) return;
+    const r = card.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width;
+    const py = (e.clientY - r.top) / r.height;
+    const rx = (0.5 - py) * 14;
+    const ry = (px - 0.5) * 14;
+    card.style.transform = `rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg)`;
+    card.style.filter = `brightness(${(1.08 - 0.12 * py).toFixed(3)})`;
+    foil.style.opacity = "1";
+    foil.style.setProperty("--mx", `${(px * 100).toFixed(1)}%`);
+    foil.style.setProperty("--my", `${(py * 100).toFixed(1)}%`);
+  };
+
+  const handleMouseLeave = () => {
+    const card = cardRef.current;
+    const foil = foilRef.current;
+    if (card) {
+      card.style.transform = "";
+      card.style.filter = "";
+    }
+    if (foil) foil.style.opacity = "0";
+  };
+
   return (
-    <div
-      className="grid grid-cols-12 items-start gap-3 rounded-lg p-5 shadow-md"
-      style={{
-        width: dim.w,
-        minHeight: autoHeight ? 0 : dim.h,
-        background: t.bg,
-        color: t.ink,
-        border: `1.5px solid ${t.border}`,
-      }}
-    >
-      {components.map(renderComp)}
+    <div className="card-3d-scene self-start" style={{ width: dim.w }}>
+      <div ref={cardRef} className="card-3d relative" onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave}>
+        <div
+          className="grid grid-cols-12 items-start gap-3 rounded-lg p-5 shadow-md"
+          style={{
+            width: dim.w,
+            minHeight: autoHeight ? 0 : dim.h,
+            background: t.bg,
+            color: t.ink,
+            border: `1.5px solid ${t.border}`,
+          }}
+        >
+          {components.map(renderComp)}
+        </div>
+        {/* 烫金光泽层：跟随光标的金色泛光 + 斜向扫过条纹 */}
+        <div ref={foilRef} className="card-foil" />
+      </div>
     </div>
   );
 }
