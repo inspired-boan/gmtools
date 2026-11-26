@@ -88,6 +88,11 @@ pub struct TemplateSnapshot {
 pub struct CardSnapshot {
     pub template_id: String,
     pub data: serde_json::Value,
+    /// 单卡导出时内嵌的模板定义；导入时若目标库没有该模板则自动重建
+    #[serde(default)]
+    pub template: Option<TemplateSnapshot>,
+    #[serde(default)]
+    pub template_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -224,23 +229,6 @@ pub fn snapshot_node(conn: &Connection, id: &str) -> Result<NodeSnapshot, String
         None
     };
 
-    let card = if node_type == "card" {
-        conn.query_row(
-            "SELECT template_id, data FROM card WHERE node_id = ?1",
-            params![id],
-            |r| {
-                Ok(CardSnapshot {
-                    template_id: r.get(0)?,
-                    data: serde_json::from_str(&r.get::<_, String>(1)?)
-                        .unwrap_or(serde_json::Value::Object(Default::default())),
-                })
-            },
-        )
-        .ok()
-    } else {
-        None
-    };
-
     let card_view = conn
         .query_row(
             "SELECT value FROM settings WHERE key = ?1",
@@ -249,6 +237,59 @@ pub fn snapshot_node(conn: &Connection, id: &str) -> Result<NodeSnapshot, String
         )
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok());
+
+    let card = if node_type == "card" {
+        let (template_id, data): (String, String) = match conn.query_row(
+            "SELECT template_id, data FROM card WHERE node_id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ) {
+            Ok(v) => v,
+            Err(_) => return Ok(NodeSnapshot {
+                id: base_id,
+                parent_id,
+                node_type,
+                name,
+                sort_order,
+                note,
+                cols,
+                rows,
+                cells,
+                children,
+                template: None,
+                card: None,
+                card_view,
+            }),
+        };
+        // 内嵌模板定义：导出单卡时对方没有模板也能渲染
+        let template = conn
+            .query_row(
+                "SELECT rule_id, size, theme, components, auto_height FROM template WHERE node_id = ?1",
+                params![template_id],
+                |r| {
+                    Ok(TemplateSnapshot {
+                        rule_id: r.get(0)?,
+                        size: r.get(1)?,
+                        theme: r.get(2)?,
+                        components: serde_json::from_str(&r.get::<_, String>(3)?)
+                            .unwrap_or(serde_json::Value::Array(vec![])),
+                        auto_height: r.get::<_, i64>(4)? != 0,
+                    })
+                },
+            )
+            .ok();
+        let template_name: Option<String> = conn
+            .query_row("SELECT name FROM node WHERE id = ?1", params![template_id], |r| r.get(0))
+            .ok();
+        Some(CardSnapshot {
+            template_id,
+            data: serde_json::from_str(&data).unwrap_or(serde_json::Value::Object(Default::default())),
+            template,
+            template_name,
+        })
+    } else {
+        None
+    };
 
     Ok(NodeSnapshot {
         id: base_id,
@@ -361,13 +402,48 @@ pub fn insert_snapshot(
         .map_err(|e| e.to_string())?;
     }
     if let Some(c) = &snap.card {
-        // 复制卡片时 template_id 保持指向同一模板节点（共享模板）；若模板在本快照子树内，
-        // 由调用方在插入前改写 id（快照导出场景已按整树处理）
+        // 模板在目标库缺失时用内嵌定义重建（挂根，全局可用），并重映射 template_id
+        let mut template_id = c.template_id.clone();
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM template WHERE node_id = ?1",
+                params![template_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if exists == 0 {
+            if let Some(t) = &c.template {
+                let new_tid = new_id();
+                let name = format!(
+                    "{}（导入）",
+                    c.template_name.clone().unwrap_or_else(|| "模板".to_string())
+                );
+                let ts = now_ms();
+                conn.execute(
+                    &format!("INSERT INTO node ({}) VALUES (?1, NULL, 'template', ?2, 0, ?3, ?4)", NODE_COLS),
+                    params![new_tid, name, ts, ts],
+                )
+                .map_err(|e| e.to_string())?;
+                conn.execute(
+                    "INSERT INTO template (node_id, rule_id, size, theme, components, auto_height, updated_at) VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        new_tid,
+                        t.size,
+                        t.theme,
+                        serde_json::to_string(&t.components).unwrap_or_else(|_| "[]".to_string()),
+                        t.auto_height as i64,
+                        ts
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+                template_id = new_tid;
+            }
+        }
         conn.execute(
             "INSERT OR REPLACE INTO card (node_id, template_id, data, updated_at) VALUES (?1, ?2, ?3, ?4)",
             params![
                 id,
-                c.template_id,
+                template_id,
                 serde_json::to_string(&c.data).unwrap_or_else(|_| "{}".to_string()),
                 now_ms()
             ],

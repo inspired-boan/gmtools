@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import CardPane from "./components/CardPane";
 import GridView from "./components/GridView";
 import NoteEditor from "./components/NoteEditor";
 import SearchBox from "./components/SearchBox";
@@ -78,13 +79,7 @@ export default function App() {
           ) : selected.nodeType === "template" ? (
             <TemplateEditor key={selected.id} nodeId={selected.id} />
           ) : selected.nodeType === "card" ? (
-            <div className="flex flex-1 flex-col items-center justify-center">
-              <div className="text-center">
-                <p className="text-caption text-muted-soft">卡片</p>
-                <h1 className="mt-1 font-display text-display-sm text-ink">{selected.name}</h1>
-                <p className="mt-3 text-body-sm text-muted">卡片填写与预览在 M10 接入</p>
-              </div>
-            </div>
+            <CardPane key={selected.id} nodeId={selected.id} />
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center">
               <div className="text-center">
