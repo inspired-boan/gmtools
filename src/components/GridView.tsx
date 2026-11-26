@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CellDto, ColDto, GridDto } from "../types";
+import type { CellDto, ColDto, ComponentDef, GridDto, TemplateDto } from "../types";
+import CardRenderer from "./CardRenderer";
 
 /**
  * 表格节点视图（里程碑 5）。
@@ -23,6 +24,28 @@ export default function GridView({ nodeId }: { nodeId: string }) {
   const resizing = useRef<{ colId: string; startX: number; startW: number } | null>(null);
   /** 脏单元格：输入即标记，失焦/卸载时冲刷，避免丢失编辑 */
   const dirty = useRef(new Map<string, { rowId: string; colId: string; value: string | null }>());
+
+  // ---------- v2 表格卡片视图 ----------
+  const [view, setView] = useState<"grid" | "card">("grid");
+  const [cardCfg, setCardCfg] = useState<{ templateId: string; mapping: Record<string, string> } | null>(null);
+  const [cardTpl, setCardTpl] = useState<TemplateDto | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const cfg = await invoke<{ templateId: string; mapping: Record<string, string> } | null>(
+          "get_card_view",
+          { nodeId },
+        );
+        setCardCfg(cfg);
+        if (cfg) {
+          setCardTpl(await invoke<TemplateDto>("get_template", { nodeId: cfg.templateId }));
+        }
+      } catch {
+        /* 尚无配置 */
+      }
+    })();
+  }, [nodeId]);
 
   const reload = useCallback(async () => {
     try {
@@ -125,8 +148,62 @@ export default function GridView({ nodeId }: { nodeId: string }) {
     });
   };
 
+  // ---------- 卡片视图数据组装 ----------
+  const rowCardData = (rowId: string): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    if (cardCfg) {
+      for (const [compId, colId] of Object.entries(cardCfg.mapping)) {
+        out[compId] = cellValue(rowId, colId) ?? "";
+      }
+    }
+    return out;
+  };
+
+  const saveCardView = async (cfg: { templateId: string; mapping: Record<string, string> } | null) => {
+    setCardCfg(cfg);
+    if (cfg) {
+      setCardTpl(await invoke<TemplateDto>("get_template", { nodeId: cfg.templateId }));
+      await invoke("set_card_view", { nodeId, config: cfg });
+    } else {
+      setCardTpl(null);
+      await invoke("set_card_view", { nodeId, config: null });
+    }
+  };
+
+  const toggleCls = (active: boolean) =>
+    `h-8 rounded-md px-3 text-caption ${active ? "bg-surface-cream-strong text-ink" : "text-muted hover:bg-surface-soft"}`;
+
   return (
     <div className="flex h-full flex-col">
+      {/* 视图切换工具栏 */}
+      <div className="flex items-center gap-1 border-b border-hairline-soft px-3 py-2">
+        <button className={toggleCls(view === "grid")} onClick={() => setView("grid")}>
+          表格
+        </button>
+        <button className={toggleCls(view === "card")} onClick={() => setView("card")}>
+          卡片
+        </button>
+        {view === "card" && cardCfg && (
+          <button
+            className="ml-3 text-caption text-primary hover:underline"
+            onClick={() => setView("grid")}
+          >
+            返回表格编辑
+          </button>
+        )}
+      </div>
+
+      {view === "card" ? (
+        <CardViewSection
+          nodeId={nodeId}
+          cols={grid.cols}
+          rows={grid.rows}
+          cardTpl={cardTpl}
+          cardCfg={cardCfg}
+          rowCardData={rowCardData}
+          onSave={saveCardView}
+        />
+      ) : (
       <div className="flex-1 overflow-auto p-4">
         <table className="border-collapse" style={{ tableLayout: "fixed" }}>
           <thead>
@@ -267,6 +344,7 @@ export default function GridView({ nodeId }: { nodeId: string }) {
           + 新增行
         </button>
       </div>
+      )}
 
       {/* markdown 单元格浮层编辑器 */}
       {mdEdit && (
@@ -430,6 +508,220 @@ function GridMenu({
       onClick={(e) => e.stopPropagation()}
     >
       {content}
+    </div>
+  );
+}
+
+// ---------- v2 表格卡片视图 ----------
+
+/** 展开叶子组件（跳过 style 装饰、深入分组一层） */
+function leafComponents(comps: ComponentDef[], out: ComponentDef[] = []): ComponentDef[] {
+  for (const c of comps) {
+    if (c.type === "group") leafComponents(c.children ?? [], out);
+    else if (c.type !== "style") out.push(c);
+  }
+  return out;
+}
+
+function CardViewSection({
+  nodeId,
+  cols,
+  rows,
+  cardTpl,
+  cardCfg,
+  rowCardData,
+  onSave,
+}: {
+  nodeId: string;
+  cols: ColDto[];
+  rows: { id: string }[];
+  cardTpl: TemplateDto | null;
+  cardCfg: { templateId: string; mapping: Record<string, string> } | null;
+  rowCardData: (rowId: string) => Record<string, unknown>;
+  onSave: (cfg: { templateId: string; mapping: Record<string, string> } | null) => Promise<void>;
+}) {
+  const [tplList, setTplList] = useState<{ nodeId: string; name: string }[]>([]);
+  const [draftTpl, setDraftTpl] = useState<TemplateDto | null>(null);
+  const [draftMapping, setDraftMapping] = useState<Record<string, string>>({});
+  const [reconfiguring, setReconfiguring] = useState(false);
+
+  // 无配置或主动重配 → 向导
+  const showSetup = !cardCfg || reconfiguring;
+
+  useEffect(() => {
+    if (showSetup) {
+      void invoke<{ nodeId: string; name: string }[]>("list_templates_for", { nodeId })
+        .then(setTplList)
+        .catch(() => setTplList([]));
+    }
+  }, [showSetup, nodeId]);
+
+  // 重新配置时预填当前配置：改几个映射即可，不必从头来
+  useEffect(() => {
+    if (reconfiguring && cardCfg) {
+      setDraftMapping({ ...cardCfg.mapping });
+      void invoke<TemplateDto>("get_template", { nodeId: cardCfg.templateId })
+        .then(setDraftTpl)
+        .catch(() => setDraftTpl(null));
+    }
+  }, [reconfiguring, cardCfg]);
+
+  const chooseDraftTemplate = async (templateId: string) => {
+    try {
+      const t = await invoke<TemplateDto>("get_template", { nodeId: templateId });
+      setDraftTpl(t);
+      setDraftMapping({});
+    } catch (e) {
+      window.alert(String(e));
+    }
+  };
+
+  if (cardCfg && !cardTpl && !showSetup) {
+    // 配置引用的模板已被删除
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="w-96 rounded-lg border border-hairline bg-canvas p-6 text-center shadow-sm">
+          <p className="text-title-sm text-ink">卡片视图的模板已被删除</p>
+          <button
+            className="mt-4 h-10 rounded-md bg-primary px-4 text-body-sm text-on-primary hover:bg-primary-active"
+            onClick={() => {
+              setReconfiguring(true);
+            }}
+          >
+            重新配置
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (showSetup) {
+    const leaves = draftTpl ? leafComponents(draftTpl.components) : [];
+    return (
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="mx-auto max-w-2xl">
+          <h2 className="text-title-md text-ink">配置卡片视图</h2>
+          <p className="mt-1 text-caption text-muted">
+            选一个模板，把表格列映射到模板组件上；每行将渲染为一张卡片。
+          </p>
+
+          {/* 第一步：选模板 */}
+          <p className="mt-5 mb-2 text-title-sm text-ink">1. 选择模板</p>
+          {draftTpl ? (
+            <div className="rounded-md border border-primary/40 bg-surface-soft px-3 py-2 text-body-sm text-ink">
+              {draftTpl.components ? `已选：${nodeId && "当前模板"}（${leaves.length} 个可映射组件）` : ""}
+              <button className="ml-3 text-caption text-primary hover:underline" onClick={() => setDraftTpl(null)}>
+                重选
+              </button>
+            </div>
+          ) : tplList.length > 0 ? (
+            <div className="space-y-2">
+              {tplList.map((t) => (
+                <button
+                  key={t.nodeId}
+                  className="h-10 w-full rounded-md border border-hairline bg-canvas px-3 text-left text-body-sm text-ink hover:border-primary hover:text-primary"
+                  onClick={() => void chooseDraftTemplate(t.nodeId)}
+                >
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-body-sm text-muted">没有可用模板——先在某规则下新建「模板」节点。</p>
+          )}
+
+          {/* 第二步：列映射 */}
+          {draftTpl && (
+            <>
+              <p className="mt-6 mb-2 text-title-sm text-ink">2. 列 → 组件映射</p>
+              <div className="space-y-2">
+                {leaves.map((c) => (
+                  <div key={c.id} className="flex items-center gap-3 rounded-md border border-hairline px-3 py-2">
+                    <span className="w-40 truncate text-body-sm text-ink">
+                      {c.label || `（${c.type}）`}
+                      {c.required && <span className="text-error">*</span>}
+                    </span>
+                    <span className="text-caption text-muted-soft">←</span>
+                    <select
+                      className="h-8 flex-1 rounded-sm border border-hairline bg-canvas px-2 text-body-sm text-ink focus:outline-none"
+                      value={draftMapping[c.id] ?? ""}
+                      onChange={(e) =>
+                        setDraftMapping((m) => {
+                          const next = { ...m };
+                          if (e.target.value) next[c.id] = e.target.value;
+                          else delete next[c.id];
+                          return next;
+                        })
+                      }
+                    >
+                      <option value="">（不映射，显示占位）</option>
+                      {cols.map((col) => (
+                        <option key={col.id} value={col.id}>
+                          {col.name}（{col.colType === "markdown" ? "markdown" : "文本"}）
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-6 flex justify-end gap-2">
+                <button
+                  className="h-10 rounded-md border border-hairline bg-canvas px-4 text-body-sm text-ink hover:bg-surface-soft"
+                  onClick={() => setReconfiguring(false)}
+                >
+                  取消
+                </button>
+                <button
+                  className="h-10 rounded-md bg-primary px-4 text-body-sm text-on-primary hover:bg-primary-active"
+                  onClick={() => {
+                    if (draftTpl) {
+                      void onSave({ templateId: draftTpl.nodeId, mapping: draftMapping }).then(() =>
+                        setReconfiguring(false),
+                      );
+                    }
+                  }}
+                >
+                  保存配置并查看
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // 卡片墙
+  if (!cardCfg || !cardTpl) return null;
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex items-center border-b border-hairline-soft px-4 py-2">
+        <p className="text-caption text-muted-soft">卡片视图 · 每行一张卡</p>
+        <button
+          className="ml-auto text-caption text-primary hover:underline"
+          onClick={() => setReconfiguring(true)}
+        >
+          重新配置
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto bg-surface-soft p-6">
+      {rows.length === 0 ? (
+        <p className="py-10 text-center text-body-sm text-muted">表格还没有行——切回表格视图添加数据。</p>
+      ) : (
+        <div className="flex flex-wrap gap-4">
+          {rows.map((row) => (
+            <CardRenderer
+              key={row.id}
+              components={cardTpl.components}
+              data={rowCardData(row.id)}
+              theme={cardTpl.theme}
+              size={cardTpl.size}
+              autoHeight={cardTpl.autoHeight}
+            />
+          ))}
+        </div>
+      )}
+      </div>
     </div>
   );
 }
