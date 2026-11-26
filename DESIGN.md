@@ -1,6 +1,6 @@
 # gmtools 设计文档
 
-> 依据 [mpt.md](mpt.md) 的需求拷问确认后整理。v1（树形目录 / 笔记 / 表格 / 搜索 / 导出）与 v2（卡片/模板系统）均写到实现级；**两者均已实施完成并经用户验收**（2026-11-26，M1–M11）。
+> 依据 [mpt.md](mpt.md) 的需求拷问确认后整理。v1（树形目录 / 笔记 / 表格 / 搜索 / 导出）与 v2（卡片/模板系统）均写到实现级；**两者均已实施完成并经用户验收**（2026-11-26，M1–M11）。v3（模板库/卡片库/跑团面板）设计完成，待实施（M12–M14，见 §8）。
 > UI 视觉规范见 [DESIGN-claude.md](DESIGN-claude.md)。
 
 ## 1. 定位与边界
@@ -396,3 +396,113 @@ set_card_view(nodeId, config | null)
 
 - `grid_col.type='card'`（单元格直接存卡片引用）留 v3；本轮表格卡片视图走"列映射"方案，不动 grid_cell 结构。
 - 下拉框动态数据源留 v3：`options` 字段允许后续扩展为 `{ source: "table", colId }` 对象形式，静态数组保持兼容。
+
+---
+
+## 8. v3 模板库 / 卡片库 / 跑团面板
+
+> 经拷问确认的设计（两轮 17 决策）。复用 v1 任意嵌套树、快照/导出管线、v2 卡片渲染器。
+
+### 8.0 决策记录
+
+| 决策点 | 结论 |
+|---|---|
+| 库的形态 | 树节点：`node.type` 扩展 `tplLib` / `cardLib`，任意规则下可建任意多个，点开为库管理界面 |
+| 收藏语义 | 复制快照 + 可选"同步自来源"（`library_meta` 记来源 id，来源已删则置灰） |
+| 库项能力 | 完全可编辑（模板可进编辑器、卡片可填写），只是住在库里 |
+| 卡片库收藏 | 卡片数据 + 模板定义完整带走；从库创建 = 复制整张含数据的卡 |
+| 白板卡片来源 | 引用树上卡片节点（数据单份），双击白板卡片定位原节点 |
+| 数据交换 | **面板级共享变量表**：卡片字段绑定变量，改一处全联动（"中台"）；字段值存 `@变量名` 标记 |
+| +1/-1 | 白板上所有数字字段悬停显示；绑变量的改变量，未绑定的改卡片数据；树里卡片填写视图同款（仅普通数字） |
+| 白板 MVP | 自由拖拽摆位 + 记住位置、Ctrl+滚轮缩放（0.5~1.5）、快捷 +1/-1、变量表、面板级导出；连线/框选/吸附留 v4 |
+| 收藏入口 | 右键菜单"收藏到库…" + 模板编辑器顶部 + 卡片填写面板头部 |
+| 添加卡片 | 树拖入白板 + 白板「+」列表双通道 |
+| 面板导出 | 面板摆位 + 变量表 + 引用的所有卡片子树（含模板）打包，导入 id 全重映射 |
+| 交付顺序 | M12 库 → M13 白板基础 → M14 变量中台 |
+
+### 8.1 数据模型（迁移 v6）
+
+```sql
+-- 库项来源（同步按钮用）
+CREATE TABLE library_meta (
+  node_id        TEXT PRIMARY KEY,          -- 库项（库节点的子节点）
+  source_node_id TEXT NOT NULL,             -- 收藏时的原节点
+  kind           TEXT NOT NULL,             -- 'template' | 'card'
+  collected_at   INTEGER NOT NULL
+);
+
+-- 白板摆位
+CREATE TABLE panel_items (
+  node_id      TEXT NOT NULL,               -- 面板节点 id
+  card_node_id TEXT NOT NULL,               -- 被引用的卡片节点 id
+  x            REAL NOT NULL,
+  y            REAL NOT NULL,
+  PRIMARY KEY (node_id, card_node_id)
+);
+
+-- 面板共享变量
+CREATE TABLE panel_vars (
+  node_id    TEXT NOT NULL,                 -- 面板节点 id
+  name       TEXT NOT NULL,                 -- 变量名（面板内唯一）
+  value      TEXT NOT NULL DEFAULT '0',     -- 数字或文本
+  sort_order REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (node_id, name)
+);
+```
+
+- `node.type` 枚举扩展为 `label | note | table | template | card | tplLib | cardLib | panel`。
+- **变量绑定标记**：卡片 data 中字段值为 `"@变量名"` 时表示绑定面板变量；渲染时面板负责解析为当前变量值（树里无面板上下文，显示标记原文）；+1/-1 对绑定字段改写 `panel_vars`，对普通数字改写 data。
+- 面板快照（NodeSnapshot 扩展 `panel` 字段）：`{ items: [{cardNodeId,x,y}], vars: [{name,value}], refs: [卡片子树快照...] }`——导出时 refs 收录全部被引用卡片，导入重建并重映射（卡片新 id 回填 items）。
+
+### 8.2 Tauri Command
+
+```ts
+// 库
+collect_to_library(itemNodeId, libraryNodeId)   // 深拷贝进库 + 记 library_meta
+list_library_meta(itemNodeId): { sourceNodeId } | null
+sync_from_source(itemNodeId)                    // 用来源节点当前内容覆盖库项
+
+// 面板
+get_panel(nodeId): { items, vars }              // 摆位 + 变量（卡片内容走现有树/卡片 command）
+set_panel_item(nodeId, cardNodeId, x, y)        // 拖拽落点，upsert
+remove_panel_item(nodeId, cardNodeId)
+add_panel_var(nodeId, name, value) / del_panel_var / rename_panel_var / set_panel_var_value
+get_card_value_at(cardNodeId, compId): string   // 面板渲染：解析 @标记 / 原始值
+bump_card_value(cardNodeId, compId, delta)      // +1/-1：绑变量则改 panel_vars（跨卡片联动），否则改 data
+```
+
+### 8.3 功能设计
+
+**库管理界面**（点开 tplLib / cardLib 节点）
+- 网格列出子节点（模板项显示主题缩略示意，卡片项显示渲染卡面）；顶部"从规则中收藏"引导（空态时）
+- 项操作：打开（进编辑器/填写）、重命名、同步自来源（来源存在时）、取出到…（复制到指定节点下）、删除
+- 树上库节点可直接展开看到子项（不隐藏），右键菜单同库界面操作
+
+**收藏流程**
+- 右键"收藏到库…"→ 弹窗列出全部库节点（按规则分组）→ 选定即深拷贝
+- 模板编辑器头部 / 卡片填写面板头部：同款按钮，免去回到树上右键
+
+**跑团面板白板**
+- 画布：无限大的定位区（viewport 平移 + Ctrl+滚轮缩放 0.5~1.5），卡片按 panel_items 坐标绝对定位，渲染复用 CardRenderer（view 模式）
+- 添加：树中拖卡片节点入白板（drop 落点即坐标）；白板「+」→ 列出全部卡片节点（按规则分组）点选
+- 拖动卡片：mousedown 拖动 + 松手 set_panel_item；拖动中本地即时位移
+- 失效引用：引用的卡片节点被删 → 白板灰显占位卡"已失效"，点击可移除 panel_items
+- 双击白板卡片 → 树定位并打开该卡片节点
+
+**变量中台**
+- 变量表 UI：白板右侧可收起抽屉——列表（名称/值/±按钮）、新建、改名、删除
+- 绑定：白板卡片字段悬停出现 ⛓ 图标 → 弹出变量列表（可现场新建）→ 选定即把该字段 data 值改写为 `@变量名`
+- 联动：任一处（变量表直接改值、白板 +1/-1、绑定字段修改）→ 变量更新 → 事件广播 → 所有绑定该变量的白板卡片即时重渲染
+- +1/-1：白板数字字段悬停右上角浮出 [+][-]；按住 Shift 为 ±5
+
+**面板导出/导入**
+- 导出面板节点 = NodeSnapshot.panel（items + vars + refs 卡片子树）——refs 由后端按 panel_items 自动收集
+- 导入：refs 子树重建（id 重映射）→ items 的 cardNodeId 回填新 id → vars 原样恢复 → 摆位不变
+
+### 8.4 v3 里程碑
+
+1. **M12 模板库 + 卡片库**：节点类型 + 收藏/同步/取出 + 库管理界面 + 创建卡片模板列表扩展。
+2. **M13 面板白板基础**：panel 节点 + panel_items + 白板渲染/拖拽/缩放 + 树拖入/列表添加 + 失效占位。
+3. **M14 变量中台**：panel_vars + 变量抽屉 + 字段绑定 + 实时联动 + +1/-1 + 面板导出/导入。
+
+M12 纯复用现有管线；M13 完成即"能把 PC/据点卡摆上白板"；M14 完成即完整数据中台闭环。
