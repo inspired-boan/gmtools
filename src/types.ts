@@ -1,4 +1,12 @@
-export type NodeType = "label" | "note" | "table" | "template" | "card";
+export type NodeType =
+  | "label"
+  | "note"
+  | "table"
+  | "template"
+  | "card"
+  | "tplLib"
+  | "cardLib"
+  | "panel";
 export type ColType = "text" | "markdown";
 
 // ---------- v2 卡片/模板 ----------

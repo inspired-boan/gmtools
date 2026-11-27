@@ -1,16 +1,31 @@
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
+import CollectDialog from "./CollectDialog";
 import { childrenOf, subtreeCount, useTree } from "../store";
 import type { NodeDto, NodeType } from "../types";
 
-/** 类型圆点：label 珊瑚 / note 青绿 / table 琥珀 / template 墨色 / card 灰 */
+/** 类型圆点：label 珊瑚 / note 青绿 / table 琥珀 / template 墨 / card 灰 / tplLib 淡青 / cardLib 深墨 / panel 红 */
 const DOT: Record<NodeType, string> = {
   label: "bg-primary",
   note: "bg-accent-teal",
   table: "bg-accent-amber",
   template: "bg-ink",
   card: "bg-muted",
+  tplLib: "bg-accent-teal/70",
+  cardLib: "bg-body-strong",
+  panel: "bg-error",
+};
+
+const NODE_TYPE_NAMES: Record<NodeType, string> = {
+  label: "标签",
+  note: "笔记",
+  table: "表格",
+  template: "模板",
+  card: "卡片",
+  tplLib: "模板库",
+  cardLib: "卡片库",
+  panel: "跑团面板",
 };
 
 export function Tree() {
@@ -18,6 +33,8 @@ export function Tree() {
   const [menu, setMenu] = useState<{ x: number; y: number; node: NodeDto | null } | null>(null);
   /** 右键菜单触发的重命名：Tree 层持有 id，对应行直接进入编辑态 */
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  /** 收藏到库对话框状态 */
+  const [collect, setCollect] = useState<{ kind: "template" | "card"; nodeId: string } | null>(null);
 
   useEffect(() => {
     if (!loaded) load();
@@ -69,6 +86,15 @@ export function Tree() {
           node={menu.node}
           onClose={() => setMenu(null)}
           onStartRename={(id) => setRenamingId(id)}
+          onCollect={(kind, nodeId) => setCollect({ kind, nodeId })}
+        />
+      )}
+      {collect && (
+        <CollectDialog
+          kind={collect.kind}
+          sourceNodeId={collect.nodeId}
+          onClose={() => setCollect(null)}
+          onDone={() => void load()}
         />
       )}
     </div>
@@ -247,12 +273,14 @@ function NodeMenu({
   node,
   onClose,
   onStartRename,
+  onCollect,
 }: {
   x: number;
   y: number;
   node: NodeDto | null;
   onClose: () => void;
   onStartRename: (id: string) => void;
+  onCollect: (kind: "template" | "card", nodeId: string) => void;
 }) {
   const { createNode, copyNode, deleteNode } = useTree();
   const [sub, setSub] = useState(false);
@@ -286,7 +314,11 @@ function NodeMenu({
         name={node.name}
         onCancel={onClose}
         onConfirm={async () => {
-          await deleteNode(node.id);
+          try {
+            await deleteNode(node.id);
+          } catch (e) {
+            window.alert(`删除失败: ${e}`);
+          }
           onClose();
         }}
       />
@@ -298,24 +330,19 @@ function NodeMenu({
       ref={ref}
       className="fixed z-50 w-48 rounded-lg border border-hairline bg-canvas py-1 shadow-lg"
       style={{ left: Math.min(x, window.innerWidth - 200), top: Math.min(y, window.innerHeight - 260) }}
+      // 菜单内部点击不冒泡到 window 的"点外关闭"监听器——否则确认删除框永远出不来
+      onClick={(e) => e.stopPropagation()}
     >
       <div className="relative" onMouseEnter={() => setSub(true)} onMouseLeave={() => setSub(false)}>
         <MenuItem label="新建子节点" trailing={sub ? "" : "▸"} />
         {sub && (
           <div className="absolute left-full top-0 -ml-1 w-36 rounded-lg border border-hairline bg-canvas py-1 shadow-lg">
-            {(["label", "note", "table", "template", "card"] as NodeType[]).map((t) => (
+            {(["label", "note", "table", "template", "card", "tplLib", "cardLib", "panel"] as NodeType[]).map((t) => (
               <MenuItem
                 key={t}
-                label={t === "label" ? "标签" : t === "note" ? "笔记" : t === "table" ? "表格" : t === "template" ? "模板" : "卡片"}
+                label={NODE_TYPE_NAMES[t]}
                 onClick={async () => {
-                  const names: Record<NodeType, string> = {
-                    label: "新标签",
-                    note: "新笔记",
-                    table: "新表格",
-                    template: "新模板",
-                    card: "新卡片",
-                  };
-                  await createNode(node.id, t, names[t]);
+                  await createNode(node.id, t, `新${NODE_TYPE_NAMES[t]}`);
                   onClose();
                 }}
               />
@@ -330,6 +357,32 @@ function NodeMenu({
           onClose();
         }}
       />
+      {(node.nodeType === "template" || node.nodeType === "card") && (
+        <MenuItem
+          label={`收藏到${node.nodeType === "template" ? "模板库" : "卡片库"}…`}
+          onClick={() => {
+            onClose();
+            onCollect(node.nodeType === "template" ? "template" : "card", node.id);
+          }}
+        />
+      )}
+      {node.parentId &&
+        ["tplLib", "cardLib"].includes(
+          nodes.find((n) => n.id === node.parentId)?.nodeType ?? "",
+        ) && (
+          <MenuItem
+            label="同步自来源"
+            onClick={async () => {
+              onClose();
+              try {
+                await invoke("sync_from_source", { itemNodeId: node.id });
+                await useTree.getState().load();
+              } catch (e) {
+                window.alert(String(e));
+              }
+            }}
+          />
+        )}
       <MenuItem
         label="导出节点"
         onClick={async () => {

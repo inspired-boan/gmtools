@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import CollectDialog from "./CollectDialog";
 import {
   CARD_SIZES,
   CARD_THEMES,
@@ -8,6 +9,7 @@ import {
   type ComponentDef,
   type ComponentType,
 } from "../types";
+import { useTree } from "../store";
 
 // ---------- 组件树操作工具（不可变） ----------
 
@@ -149,6 +151,7 @@ export default function TemplateEditor({ nodeId }: { nodeId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [usingCount, setUsingCount] = useState(0);
   const [saveState, setSaveState] = useState<"saved" | "dirty" | "saving">("saved");
+  const [collectOpen, setCollectOpen] = useState(false);
   const timer = useRef<number | null>(null);
   const pending = useRef(false);
   const nodeIdRef = useRef(nodeId);
@@ -272,10 +275,26 @@ export default function TemplateEditor({ nodeId }: { nodeId: string }) {
             已被 {usingCount} 张卡片使用
           </span>
         )}
-        <span className="ml-auto text-caption text-muted-soft">
+        <button
+          className="ml-auto h-8 rounded-md border border-hairline px-2.5 text-caption text-ink hover:border-primary hover:text-primary"
+          title="复制一份到某个模板库"
+          onClick={() => setCollectOpen(true)}
+        >
+          ★ 收藏到库
+        </button>
+        <span className="text-caption text-muted-soft">
           {saveState === "saving" ? "保存中…" : saveState === "dirty" ? "未保存" : "已自动保存"}
         </span>
       </div>
+
+      {collectOpen && (
+        <CollectDialog
+          kind="template"
+          sourceNodeId={nodeId}
+          onClose={() => setCollectOpen(false)}
+          onDone={() => void useTree.getState().load()}
+        />
+      )}
 
       <div className="flex min-h-0 flex-1">
         {/* 左：组件库 */}

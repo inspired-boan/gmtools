@@ -36,10 +36,27 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     if version < 5 {
         v5(conn).map_err(|e| format!("迁移 v5 失败: {}", e))?;
     }
+    if version < 6 {
+        v6(conn).map_err(|e| format!("迁移 v6 失败: {}", e))?;
+    }
 
-    conn.pragma_update(None, "user_version", 5)
+    conn.pragma_update(None, "user_version", 6)
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// v6：库项来源元数据（v3 模板库/卡片库，DESIGN.md §8.1）
+fn v6(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE library_meta (
+          node_id        TEXT PRIMARY KEY,
+          source_node_id TEXT NOT NULL,
+          kind           TEXT NOT NULL,
+          collected_at   INTEGER NOT NULL
+        );
+        "#,
+    )
 }
 
 /// v5：模板自动高度选项

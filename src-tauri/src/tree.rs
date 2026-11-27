@@ -6,7 +6,9 @@ use uuid::Uuid;
 
 pub struct Db(pub Mutex<Connection>);
 
-pub const NODE_TYPES: [&str; 5] = ["label", "note", "table", "template", "card"];
+pub const NODE_TYPES: [&str; 8] = [
+    "label", "note", "table", "template", "card", "tplLib", "cardLib", "panel",
+];
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()

@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import CollectDialog from "./CollectDialog";
 import {
   CARD_SIZES,
   CARD_THEMES,
@@ -7,6 +8,7 @@ import {
   type TemplateDto,
 } from "../types";
 import CardRenderer from "./CardRenderer";
+import { useTree } from "../store";
 
 interface NodeBrief {
   nodeId: string;
@@ -36,6 +38,7 @@ export default function CardPane({ nodeId }: { nodeId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<"saved" | "dirty">("saved");
   const [formHidden, setFormHidden] = useState(false);
+  const [collectOpen, setCollectOpen] = useState(false);
   const timer = useRef<number | null>(null);
   const pending = useRef(false);
   const stateRef = useRef<CardData | null>(null);
@@ -296,6 +299,13 @@ export default function CardPane({ nodeId }: { nodeId: string }) {
               {saveState === "dirty" ? "未保存" : "已自动保存"}
             </span>
             <button
+              className="ml-3 h-7 rounded-md border border-hairline px-2 text-caption text-ink hover:border-primary hover:text-primary"
+              title="复制一份到某个卡片库"
+              onClick={() => setCollectOpen(true)}
+            >
+              ★ 收藏
+            </button>
+            <button
               className="ml-3 h-7 w-7 rounded-md text-caption text-muted hover:bg-surface-soft hover:text-ink"
               title="收起填写面板"
               onClick={() => setFormHidden(true)}
@@ -337,6 +347,15 @@ export default function CardPane({ nodeId }: { nodeId: string }) {
           />
         </div>
       </div>
+
+      {collectOpen && (
+        <CollectDialog
+          kind="card"
+          sourceNodeId={nodeId}
+          onClose={() => setCollectOpen(false)}
+          onDone={() => void useTree.getState().load()}
+        />
+      )}
     </div>
   );
 }

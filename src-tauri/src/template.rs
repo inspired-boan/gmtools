@@ -130,11 +130,14 @@ pub fn list_cards_using(state: State<Db>, template_node_id: String) -> Result<Ve
     Ok(items)
 }
 
-/// 卡片可选模板：rule_id 与卡片最近的 label 祖先一致，或 NULL（全局）
+/// 卡片可选模板：规则内模板 + 同规则下模板库中的模板 + 全局（NULL）模板
 #[tauri::command]
 pub fn list_templates_for(state: State<Db>, node_id: String) -> Result<Vec<NodeBrief>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let rule = nearest_label_ancestor(&conn, Some(&node_id))?;
+    let mut out: Vec<NodeBrief> = Vec::new();
+
+    // 1) 规则内 / 全局模板（原有逻辑）
     let mut stmt = conn
         .prepare(
             "SELECT t.node_id, n.name FROM template t JOIN node n ON n.id = t.node_id
@@ -148,7 +151,42 @@ pub fn list_templates_for(state: State<Db>, node_id: String) -> Result<Vec<NodeB
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
-    Ok(items)
+    out.extend(items);
+
+    // 2) 同规则下模板库中的模板
+    let mut stmt = conn
+        .prepare("SELECT id FROM node WHERE type = 'tplLib'")
+        .map_err(|e| e.to_string())?;
+    let lib_ids = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    for lib_id in lib_ids {
+        let lib_rule = nearest_label_ancestor(&conn, Some(&lib_id))?;
+        if lib_rule != rule {
+            continue;
+        }
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.node_id, n.name FROM template t JOIN node n ON n.id = t.node_id
+                 WHERE n.parent_id = ?1 ORDER BY n.name",
+            )
+            .map_err(|e| e.to_string())?;
+        let items = stmt
+            .query_map(params![lib_id], |r| {
+                Ok(NodeBrief { node_id: r.get(0)?, name: r.get(1)? })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        out.extend(items);
+    }
+
+    // 去重 + 按名排序
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out.dedup_by(|a, b| a.node_id == b.node_id);
+    Ok(out)
 }
 
 // ---------- 卡片 ----------

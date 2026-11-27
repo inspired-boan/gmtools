@@ -2,6 +2,7 @@ mod db;
 mod export;
 mod grid;
 mod image;
+mod library;
 mod note;
 mod search;
 mod template;
@@ -86,6 +87,10 @@ pub fn run() {
             template::save_card,
             template::get_card_view,
             template::set_card_view,
+            library::collect_to_library,
+            library::list_library_meta,
+            library::sync_from_source,
+            library::list_libraries,
             note::get_note,
             note::save_note,
             image::save_image,
