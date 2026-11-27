@@ -187,12 +187,24 @@ export default function CardPane({ nodeId }: { nodeId: string }) {
             <span className="mb-1 block text-caption text-muted-soft">
               {c.label} {star}
             </span>
-            <input
-              type="number"
-              className={inputCls}
-              value={value}
-              onChange={(e) => setValue(c.id, e.target.value === "" ? undefined : Number(e.target.value))}
-            />
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                className={inputCls}
+                value={value}
+                onChange={(e) => setValue(c.id, e.target.value === "" ? undefined : Number(e.target.value))}
+              />
+              {[1, -1].map((d) => (
+                <button
+                  key={d}
+                  className="h-8 w-8 shrink-0 rounded-md border border-hairline text-caption font-bold text-primary hover:border-primary hover:bg-primary/10"
+                  title={d > 0 ? "+1" : "-1"}
+                  onClick={() => setValue(c.id, (Number(value) || 0) + d)}
+                >
+                  {d > 0 ? "+1" : "-1"}
+                </button>
+              ))}
+            </div>
           </label>
         );
       case "markdown":

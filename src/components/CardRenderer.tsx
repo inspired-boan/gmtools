@@ -32,12 +32,21 @@ export default function CardRenderer({
   theme,
   size,
   autoHeight,
+  onBump,
+  onBind,
+  flat,
 }: {
   components: ComponentDef[];
   data: Record<string, unknown>;
   theme: keyof typeof CARD_THEMES;
   size: keyof typeof CARD_SIZES;
   autoHeight?: boolean;
+  /** 数字字段 ±1 快捷操作（跑团面板用；不传则不显示按钮） */
+  onBump?: (compId: string, delta: number) => void;
+  /** 字段绑定变量入口（跑团面板用；不传则不显示按钮） */
+  onBind?: (compId: string) => void;
+  /** 平面模式：关闭 3D 倾斜与烫金（白板交互优先） */
+  flat?: boolean;
 }) {
   const t = CARD_THEMES[theme];
   const dim = CARD_SIZES[size];
@@ -130,7 +139,7 @@ export default function CardRenderer({
       default:
         // text / number / dropdown
         return (
-          <div key={c.id} style={{ gridColumn: `span ${c.span}` }}>
+          <div key={c.id} className="group/field relative" style={{ gridColumn: `span ${c.span}` }}>
             {c.label && (
               <p className="mb-0.5 text-caption" style={{ color: t.muted }}>
                 {c.label}
@@ -139,6 +148,47 @@ export default function CardRenderer({
             <p className="text-body-sm" style={{ color: t.ink, ...vStyle }}>
               {v || (c.required ? "（未填写）" : "—")}
             </p>
+            {onBind && (
+              <button
+                className="absolute right-0 top-0 hidden rounded-xs px-1 text-[11px] group-hover/field:block"
+                style={{ color: t.muted }}
+                title="绑定面板变量"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onBind(c.id);
+                }}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                ⛓
+              </button>
+            )}
+            {onBump && (c.type === "number" || /^-?\d+(\.\d+)?$/.test(v)) && (
+              <div
+                className="absolute right-0 bottom-0 hidden items-center gap-0.5 group-hover/field:flex"
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                {[1, -1].map((d) => (
+                  <button
+                    key={d}
+                    className="rounded-xs px-1.5 text-[11px] font-bold hover:bg-primary/20"
+                    style={{ color: t.accent }}
+                    title={d > 0 ? "+1（右键 +5）" : "-1（右键 -5）"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onBump(c.id, d > 0 ? 1 : -1);
+                    }}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onBump(c.id, d > 0 ? 5 : -5);
+                    }}
+                  >
+                    {d > 0 ? "+1" : "-1"}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         );
     }
@@ -173,6 +223,23 @@ export default function CardRenderer({
     }
     if (foil) foil.style.opacity = "0";
   };
+
+  if (flat) {
+    return (
+      <div
+        className="grid grid-cols-12 items-start gap-3 rounded-lg p-5 shadow-md"
+        style={{
+          width: dim.w,
+          minHeight: autoHeight ? 0 : dim.h,
+          background: t.bg,
+          color: t.ink,
+          border: `1.5px solid ${t.border}`,
+        }}
+      >
+        {components.map(renderComp)}
+      </div>
+    );
+  }
 
   return (
     <div className="card-3d-scene self-start" style={{ width: dim.w }}>

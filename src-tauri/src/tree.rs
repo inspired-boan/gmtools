@@ -53,7 +53,7 @@ const NODE_COLS: &str = "id, parent_id, type, name, sort_order, created_at, upda
 
 // ---------- 快照（回收站 / 导出共用） ----------
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeSnapshot {
     pub id: String,
@@ -76,7 +76,7 @@ pub struct NodeSnapshot {
     pub panel: Option<serde_json::Value>, // panel_items 数组（M14 导出时扩展为含卡片子树）
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TemplateSnapshot {
     pub rule_id: Option<String>,
@@ -87,7 +87,7 @@ pub struct TemplateSnapshot {
     pub auto_height: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CardSnapshot {
     pub template_id: String,
@@ -99,7 +99,7 @@ pub struct CardSnapshot {
     pub template_name: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ColSnapshot {
     pub id: String,
@@ -109,14 +109,14 @@ pub struct ColSnapshot {
     pub sort_order: f64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RowSnapshot {
     pub id: String,
     pub sort_order: f64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CellSnapshot {
     pub row_id: String,
@@ -257,7 +257,37 @@ pub fn snapshot_node(conn: &Connection, id: &str) -> Result<NodeSnapshot, String
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        Some(serde_json::Value::Array(items))
+
+        // 引用的卡片子树（导出 = 完整存档）
+        let card_ids: Vec<String> = items
+            .iter()
+            .filter_map(|v| v.get("cardNodeId").and_then(|x| x.as_str()).map(|s| s.to_string()))
+            .collect();
+        let mut refs = Vec::new();
+        for cid in &card_ids {
+            if let Ok(snap) = snapshot_node(conn, cid) {
+                refs.push(serde_json::to_value(&snap).unwrap_or(serde_json::Value::Null));
+            }
+        }
+
+        let mut vars = Vec::new();
+        let mut stmt = conn
+            .prepare("SELECT name, value, sort_order FROM panel_vars WHERE node_id = ?1 ORDER BY sort_order")
+            .map_err(|e| e.to_string())?;
+        let var_rows = stmt
+            .query_map(params![id], |r| {
+                Ok(serde_json::json!({
+                    "name": r.get::<_, String>(0)?,
+                    "value": r.get::<_, String>(1)?,
+                    "sortOrder": r.get::<_, f64>(2)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        vars.extend(var_rows);
+
+        Some(serde_json::json!({ "items": items, "vars": vars, "refs": refs }))
     } else {
         None
     };
@@ -488,20 +518,89 @@ pub fn insert_snapshot(
     }
 
     if let Some(p) = &snap.panel {
-        if let Some(items) = p.as_array() {
-            for it in items {
-                let cid = it.get("cardNodeId").and_then(|v| v.as_str()).unwrap_or("");
-                let x = it.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let y = it.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                if cid.is_empty() {
-                    continue;
-                }
-                conn.execute(
-                    "INSERT OR IGNORE INTO panel_items (node_id, card_node_id, x, y) VALUES (?1, ?2, ?3, ?4)",
-                    params![id, cid, x, y],
+        // 兼容两种形态：旧数组（仅 items）与对象 {items, vars, refs}
+        let (items, vars, refs): (Vec<serde_json::Value>, Vec<serde_json::Value>, Vec<serde_json::Value>) =
+            if let Some(arr) = p.as_array() {
+                (arr.clone(), vec![], vec![])
+            } else if let Some(obj) = p.as_object() {
+                (
+                    obj.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
+                    obj.get("vars").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
+                    obj.get("refs").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
                 )
-                .map_err(|e| e.to_string())?;
+            } else {
+                (vec![], vec![], vec![])
+            };
+
+        // refs：目标库缺失的卡片补插为面板同级，收集 old→new id 映射（恢复场景卡片已在库中，保持原 id）
+        let mut id_map: std::collections::BTreeMap<String, String> = Default::default();
+        if regenerate_ids {
+            for rv in &refs {
+                let rs: NodeSnapshot = match serde_json::from_value(rv.clone()) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let exists: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM node WHERE id = ?1",
+                        params![rs.id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                if exists > 0 {
+                    id_map.insert(rs.id.clone(), rs.id.clone());
+                } else {
+                    let max_order: f64 = conn
+                        .query_row(
+                            "SELECT COALESCE(MAX(sort_order), 0) FROM node WHERE parent_id IS ?1",
+                            params![new_parent],
+                            |r| r.get(0),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    let mut r2 = rs.clone();
+                    r2.parent_id = None;
+                    r2.sort_order = max_order + 1000.0;
+                    let new_cid = insert_snapshot(conn, &r2, new_parent, None, true)?;
+                    id_map.insert(rs.id.clone(), new_cid);
+                }
             }
+        } else {
+            for rv in &refs {
+                if let Some(cid) = rv.get("id").and_then(|v| v.as_str()) {
+                    id_map.insert(cid.to_string(), cid.to_string());
+                }
+            }
+        }
+
+        // 摆位（card id 重映射）
+        for it in &items {
+            let cid = it.get("cardNodeId").and_then(|v| v.as_str()).unwrap_or("");
+            let x = it.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let y = it.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            if cid.is_empty() {
+                continue;
+            }
+            let mapped = id_map.get(cid).cloned().unwrap_or_else(|| cid.to_string());
+            conn.execute(
+                "INSERT OR IGNORE INTO panel_items (node_id, card_node_id, x, y) VALUES (?1, ?2, ?3, ?4)",
+                params![id, mapped, x, y],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        // 变量
+        for v in &vars {
+            let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("");
+            let value = v.get("value").and_then(|x| x.as_str()).unwrap_or("0");
+            let order = v.get("sortOrder").and_then(|x| x.as_f64()).unwrap_or(0.0);
+            if name.is_empty() {
+                continue;
+            }
+            conn.execute(
+                "INSERT OR REPLACE INTO panel_vars (node_id, name, value, sort_order) VALUES (?1, ?2, ?3, ?4)",
+                params![id, name, value, order],
+            )
+            .map_err(|e| e.to_string())?;
         }
     }
 
