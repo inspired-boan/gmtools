@@ -4,6 +4,7 @@ mod grid;
 mod image;
 mod library;
 mod note;
+mod panel;
 mod search;
 mod template;
 mod tree;
@@ -91,6 +92,9 @@ pub fn run() {
             library::list_library_meta,
             library::sync_from_source,
             library::list_libraries,
+            panel::get_panel,
+            panel::set_panel_item,
+            panel::remove_panel_item,
             note::get_note,
             note::save_note,
             image::save_image,

@@ -72,6 +72,8 @@ pub struct NodeSnapshot {
     pub card: Option<CardSnapshot>,
     #[serde(default)]
     pub card_view: Option<serde_json::Value>,
+    #[serde(default)]
+    pub panel: Option<serde_json::Value>, // panel_items 数组（M14 导出时扩展为含卡片子树）
 }
 
 #[derive(Serialize, Deserialize)]
@@ -240,6 +242,26 @@ pub fn snapshot_node(conn: &Connection, id: &str) -> Result<NodeSnapshot, String
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok());
 
+    let panel = if node_type == "panel" {
+        let mut stmt = conn
+            .prepare("SELECT card_node_id, x, y FROM panel_items WHERE node_id = ?1")
+            .map_err(|e| e.to_string())?;
+        let items = stmt
+            .query_map(params![id], |r| {
+                Ok(serde_json::json!({
+                    "cardNodeId": r.get::<_, String>(0)?,
+                    "x": r.get::<_, f64>(1)?,
+                    "y": r.get::<_, f64>(2)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Some(serde_json::Value::Array(items))
+    } else {
+        None
+    };
+
     let card = if node_type == "card" {
         let (template_id, data): (String, String) = match conn.query_row(
             "SELECT template_id, data FROM card WHERE node_id = ?1",
@@ -261,6 +283,7 @@ pub fn snapshot_node(conn: &Connection, id: &str) -> Result<NodeSnapshot, String
                 template: None,
                 card: None,
                 card_view,
+                panel,
             }),
         };
         // 内嵌模板定义：导出单卡时对方没有模板也能渲染
@@ -307,6 +330,7 @@ pub fn snapshot_node(conn: &Connection, id: &str) -> Result<NodeSnapshot, String
         template,
         card,
         card_view,
+        panel,
     })
 }
 
@@ -461,6 +485,24 @@ pub fn insert_snapshot(
             ],
         )
         .map_err(|e| e.to_string())?;
+    }
+
+    if let Some(p) = &snap.panel {
+        if let Some(items) = p.as_array() {
+            for it in items {
+                let cid = it.get("cardNodeId").and_then(|v| v.as_str()).unwrap_or("");
+                let x = it.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let y = it.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                if cid.is_empty() {
+                    continue;
+                }
+                conn.execute(
+                    "INSERT OR IGNORE INTO panel_items (node_id, card_node_id, x, y) VALUES (?1, ?2, ?3, ?4)",
+                    params![id, cid, x, y],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
     }
 
     for child in &snap.children {

@@ -39,10 +39,36 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     if version < 6 {
         v6(conn).map_err(|e| format!("迁移 v6 失败: {}", e))?;
     }
+    if version < 7 {
+        v7(conn).map_err(|e| format!("迁移 v7 失败: {}", e))?;
+    }
 
-    conn.pragma_update(None, "user_version", 6)
+    conn.pragma_update(None, "user_version", 7)
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// v7：跑团面板（DESIGN.md §8.1）——白板摆位 + 共享变量（变量表结构先建，M14 实装）
+fn v7(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE panel_items (
+          node_id      TEXT NOT NULL,
+          card_node_id TEXT NOT NULL,
+          x            REAL NOT NULL DEFAULT 0,
+          y            REAL NOT NULL DEFAULT 0,
+          PRIMARY KEY (node_id, card_node_id)
+        );
+
+        CREATE TABLE panel_vars (
+          node_id    TEXT NOT NULL,
+          name       TEXT NOT NULL,
+          value      TEXT NOT NULL DEFAULT '0',
+          sort_order REAL NOT NULL DEFAULT 0,
+          PRIMARY KEY (node_id, name)
+        );
+        "#,
+    )
 }
 
 /// v6：库项来源元数据（v3 模板库/卡片库，DESIGN.md §8.1）

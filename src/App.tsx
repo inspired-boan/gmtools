@@ -3,6 +3,7 @@ import CardPane from "./components/CardPane";
 import GridView from "./components/GridView";
 import LibraryPane from "./components/LibraryPane";
 import NoteEditor from "./components/NoteEditor";
+import PanelBoard from "./components/PanelBoard";
 import SearchBox from "./components/SearchBox";
 import SettingsModal from "./components/SettingsModal";
 import TemplateEditor from "./components/TemplateEditor";
@@ -84,13 +85,7 @@ export default function App() {
           ) : selected.nodeType === "tplLib" || selected.nodeType === "cardLib" ? (
             <LibraryPane key={selected.id} nodeId={selected.id} />
           ) : selected.nodeType === "panel" ? (
-            <div className="flex flex-1 flex-col items-center justify-center">
-              <div className="text-center">
-                <p className="text-caption text-muted-soft">跑团面板</p>
-                <h1 className="mt-1 font-display text-display-sm text-ink">{selected.name}</h1>
-                <p className="mt-3 text-body-sm text-muted">白板在 M13 接入</p>
-              </div>
-            </div>
+            <PanelBoard key={selected.id} nodeId={selected.id} />
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center">
               <div className="text-center">
